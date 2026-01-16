@@ -11,9 +11,7 @@
 #ifndef HAL_H
 #define HAL_H
 
-#include <stdint.h>
-#include <stddef.h>
-#include "nanos.h"
+#include "nanos.h"  /* For freestanding types */
 
 /* ==========================================================================
  * Architecture Detection

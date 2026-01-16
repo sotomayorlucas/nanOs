@@ -6,8 +6,7 @@
 #ifndef E1000_H
 #define E1000_H
 
-#include <stdint.h>
-#include "nanos.h"
+#include "nanos.h"  /* For types and structures */
 
 /* ==========================================================================
  * PCI Configuration - Where to find our NIC
