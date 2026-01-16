@@ -27,7 +27,7 @@ ifeq ($(ARCH),x86)
     ISO     := nanos-x86.iso
 
     ASM_SRC := boot/boot.asm
-    C_SRC   := kernel/kernel.c drivers/e1000_minimal.c arch/x86/hal_x86.c
+    C_SRC   := kernel/kernel.c kernel/collective.c drivers/e1000_minimal.c arch/x86/hal_x86.c
 
     QEMU_OPTS := -netdev user,id=net0 -device e1000,netdev=net0 -m 32M
     QEMU_NET_SWARM := -netdev socket,id=net0,mcast=230.0.0.1:1234 \
@@ -53,7 +53,7 @@ else ifeq ($(ARCH),arm64)
     IMAGE   := nanos-arm64.bin
 
     ASM_SRC := arch/arm64/boot.S
-    C_SRC   := kernel/kernel_portable.c drivers/virtio_net.c arch/arm64/hal_arm64.c
+    C_SRC   := kernel/kernel_portable.c kernel/collective.c drivers/virtio_net.c arch/arm64/hal_arm64.c
 
     QEMU_MACHINE := -M virt -cpu cortex-a72
     QEMU_OPTS := $(QEMU_MACHINE) -m 128M -nographic \

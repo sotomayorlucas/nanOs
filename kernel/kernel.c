@@ -1,6 +1,9 @@
 /*
- * NanOS - The Hive Mind Kernel v0.2
- * A reactive unikernel with immune system, cell differentiation, and apoptosis
+ * NanOS - The Hive Mind Kernel v0.3
+ * A reactive unikernel with collective intelligence:
+ * - Quorum sensing (neighbor tracking)
+ * - Queen elections
+ * - Gradient-based routing
  */
 
 #include "../include/nanos.h"
@@ -358,11 +361,12 @@ bool gossip_should_relay(struct nanos_pheromone* pkt) {
  * ========================================================================== */
 static const char* role_name(uint8_t role) {
     switch (role) {
-        case ROLE_WORKER:   return "WORKER";
-        case ROLE_EXPLORER: return "EXPLORER";
-        case ROLE_SENTINEL: return "SENTINEL";
-        case ROLE_QUEEN:    return "QUEEN";
-        default:            return "UNKNOWN";
+        case ROLE_WORKER:    return "WORKER";
+        case ROLE_EXPLORER:  return "EXPLORER";
+        case ROLE_SENTINEL:  return "SENTINEL";
+        case ROLE_QUEEN:     return "QUEEN";
+        case ROLE_CANDIDATE: return "CANDIDATE";
+        default:             return "UNKNOWN";
     }
 }
 
@@ -463,8 +467,22 @@ void cell_apoptosis(void) {
     g_state.packets_rx = 0;
     g_state.packets_tx = 0;
     g_state.packets_dropped = 0;
-    g_state.neighbors_seen = 0;
+    g_state.packets_routed = 0;
     g_state.alarms_relayed = 0;
+    g_state.neighbor_count = 0;
+    g_state.distance_to_queen = (g_state.role == ROLE_QUEEN) ? 0 : GRADIENT_INFINITY;
+    g_state.gradient_via = 0;
+    g_state.known_queen_id = 0;
+    g_state.last_queen_seen = 0;
+    g_state.election.participating = 0;
+
+    /* Clear neighbor and route tables */
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+        g_state.neighbors[i].node_id = 0;
+    }
+    for (int i = 0; i < ROUTE_CACHE_SIZE; i++) {
+        g_state.routes[i].valid = 0;
+    }
 
     vga_set_color(0x0A);  /* Back to green */
     vga_puts("    New Node ID: ");
@@ -518,16 +536,29 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 
     g_state.packets_rx++;
 
+    /* Update collective intelligence (all packet types) */
+    neighbor_update(pkt);
+    gradient_update(pkt);
+
+    /* Handle routed packets */
+    if (pkt->flags & FLAG_ROUTED) {
+        if (pkt->dest_id != 0 && pkt->dest_id != g_state.node_id) {
+            route_forward(pkt);
+            return;  /* Don't process, just forward */
+        }
+    }
+
     /* Process by type */
     switch (pkt->type) {
         case PHEROMONE_HELLO:
-            g_state.neighbors_seen++;
             if (g_state.role == ROLE_SENTINEL) {
                 /* Sentinels log all contacts */
                 vga_puts("< [");
                 vga_puts(role_name(PKT_GET_ROLE(pkt)));
                 vga_puts("] ");
                 vga_put_hex(pkt->node_id);
+                vga_puts(" d=");
+                vga_put_dec(pkt->distance);
                 vga_puts("\n");
             }
             break;
@@ -589,6 +620,40 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
+        case PHEROMONE_ELECTION:
+            /* Queen election in progress */
+            election_process(pkt);
+            break;
+
+        case PHEROMONE_CORONATION:
+            /* New queen announced */
+            if (verify_hmac(pkt)) {
+                g_state.known_queen_id = pkt->node_id;
+                g_state.last_queen_seen = ticks;
+                g_state.distance_to_queen = pkt->hop_count + 1;
+                g_state.gradient_via = pkt->node_id;
+
+                /* Cancel any ongoing election */
+                g_state.election.participating = 0;
+                if (g_state.role == ROLE_CANDIDATE) {
+                    g_state.role = g_state.previous_role;
+                }
+
+                vga_set_color(0x0D);
+                vga_puts(">> NEW QUEEN: ");
+                vga_put_hex(pkt->node_id);
+                vga_puts("\n");
+                vga_set_color(0x0A);
+
+                /* Relay coronation */
+                if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+                    pkt->ttl--;
+                    pkt->hop_count++;
+                    e1000_send(pkt, sizeof(*pkt));
+                }
+            }
+            break;
+
         default:
             break;
     }
@@ -610,6 +675,13 @@ void emit_heartbeat(void) {
 
     PKT_SET_ROLE(&pkt, g_state.role);
 
+    /* Routing fields - propagate gradient */
+    pkt.dest_id = 0;  /* Broadcast */
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    pkt.via_node_lo = g_state.gradient_via & 0xFF;
+    pkt.via_node_hi = (g_state.gradient_via >> 8) & 0xFF;
+
     /* Stats in payload */
     uint8_t* p = pkt.payload;
     *(uint32_t*)p = g_state.packets_rx; p += 4;
@@ -619,9 +691,13 @@ void emit_heartbeat(void) {
     *p++ = heap_usage_percent();
     *p++ = g_state.role;
     *p++ = e1000_tx_queue_depth();
+    *p++ = g_state.neighbor_count;
 
     /* Zero HMAC for non-critical message */
     for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+
+    /* Propagate gradient before sending */
+    gradient_propagate();
 
     if (e1000_send(&pkt, sizeof(pkt)) == 0) {
         g_state.packets_tx++;
@@ -635,6 +711,7 @@ void emit_heartbeat(void) {
  * ========================================================================== */
 void nanos_loop(void) {
     static uint8_t rx_buffer[2048];
+    static uint32_t last_maintenance = 0;
 
     for (;;) {
         /* Check for apoptosis conditions */
@@ -654,6 +731,14 @@ void nanos_loop(void) {
                     (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
                 process_pheromone(pkt);
             }
+        }
+
+        /* Periodic collective intelligence maintenance (every ~1 second) */
+        if (ticks - last_maintenance >= 100) {
+            neighbor_expire();      /* Remove stale neighbors */
+            quorum_evaluate();      /* Adapt role based on neighborhood */
+            election_check_timeout(); /* Check for election completion */
+            last_maintenance = ticks;
         }
 
         /* Emit heartbeat based on role */
@@ -682,7 +767,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     /* Banner */
     vga_set_color(0x0B);  /* Cyan */
     vga_puts("========================================\n");
-    vga_puts("  NanOS v0.2 - Hive Mind with Immunity\n");
+    vga_puts("  NanOS v0.3 - Collective Intelligence\n");
     vga_puts("========================================\n\n");
     vga_set_color(0x0A);
 
@@ -740,9 +825,28 @@ void kernel_main(uint32_t magic, void* mb_info) {
     g_state.packets_rx = 0;
     g_state.packets_tx = 0;
     g_state.packets_dropped = 0;
-    g_state.neighbors_seen = 0;
+    g_state.packets_routed = 0;
     g_state.alarms_relayed = 0;
     g_state.gossip_index = 0;
+    g_state.last_role_check = 0;
+
+    /* Initialize collective intelligence state */
+    g_state.neighbor_count = 0;
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+        g_state.neighbors[i].node_id = 0;
+    }
+    for (int i = 0; i < 8; i++) {
+        g_state.role_counts[i] = 0;
+    }
+    g_state.last_queen_seen = 0;
+    g_state.known_queen_id = 0;
+    g_state.distance_to_queen = (g_state.role == ROLE_QUEEN) ? 0 : GRADIENT_INFINITY;
+    g_state.gradient_via = 0;
+    for (int i = 0; i < ROUTE_CACHE_SIZE; i++) {
+        g_state.routes[i].valid = 0;
+    }
+    g_state.election.participating = 0;
+    g_state.election.phase = ELECTION_PHASE_NONE;
 
     /* Clear gossip cache */
     for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
@@ -750,9 +854,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
     }
 
     vga_puts("\n[*] Cell alive. Features:\n");
-    vga_puts("    - Gossip protocol (anti-storm)\n");
+    vga_puts("    - Quorum sensing\n");
+    vga_puts("    - Queen elections\n");
+    vga_puts("    - Gradient routing\n");
     vga_puts("    - HMAC authentication\n");
-    vga_puts("    - Role specialization\n");
     vga_puts("    - Apoptosis at ");
     vga_put_dec(HEAP_CRITICAL_PCT);
     vga_puts("% heap or ");
