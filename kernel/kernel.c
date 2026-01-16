@@ -1,6 +1,6 @@
 /*
- * NanOS - The Hive Mind Kernel
- * A reactive unikernel that lives to sense and respond
+ * NanOS - The Hive Mind Kernel v0.2
+ * A reactive unikernel with immune system, cell differentiation, and apoptosis
  */
 
 #include "../include/nanos.h"
@@ -8,47 +8,58 @@
 #include "../include/e1000.h"
 
 /* ==========================================================================
- * Global State - The cell's memory (one instance, no malloc)
+ * Global State - The cell's memory
  * ========================================================================== */
 struct nanos_state g_state;
 
 /* ==========================================================================
- * Bump Allocator - Memory that grows but never shrinks
- * Like biological tissue, once allocated it's part of us forever
+ * Bump Allocator with Apoptosis Support
  * ========================================================================== */
-static uint8_t heap[65536];  /* 64KB heap - plenty for a cell */
+#define HEAP_SIZE 65536
+static uint8_t heap[HEAP_SIZE];
 static size_t heap_ptr = 0;
 
 void* bump_alloc(size_t size) {
-    /* Align to 16 bytes for performance */
-    size = (size + 15) & ~15;
+    size = (size + 15) & ~15;  /* 16-byte align */
 
-    if (heap_ptr + size > sizeof(heap)) {
-        /* Out of memory - cell dies */
-        return (void*)0;
+    if (heap_ptr + size > HEAP_SIZE) {
+        return (void*)0;  /* Trigger apoptosis check */
     }
 
     void* ptr = &heap[heap_ptr];
     heap_ptr += size;
+    g_state.heap_used = heap_ptr;
     return ptr;
 }
 
+size_t heap_usage_percent(void) {
+    return (heap_ptr * 100) / HEAP_SIZE;
+}
+
+void heap_reset(void) {
+    heap_ptr = 0;
+    g_state.heap_used = 0;
+}
+
 /* ==========================================================================
- * VGA Text Mode - Primitive output for debugging
- * Address: 0xB8000, 80x25 characters, attribute byte per char
+ * VGA Console
  * ========================================================================== */
 #define VGA_ADDR    0xB8000
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
-#define VGA_COLOR   0x0A    /* Bright green on black - the swarm color */
 
 static uint16_t* const vga_buffer = (uint16_t*)VGA_ADDR;
 static int vga_row = 0;
 static int vga_col = 0;
+static uint8_t vga_color = 0x0A;  /* Default: bright green */
+
+void vga_set_color(uint8_t color) {
+    vga_color = color;
+}
 
 void vga_clear(void) {
     for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        vga_buffer[i] = (VGA_COLOR << 8) | ' ';
+        vga_buffer[i] = (vga_color << 8) | ' ';
     }
     vga_row = 0;
     vga_col = 0;
@@ -59,7 +70,7 @@ void vga_putchar(char c) {
         vga_col = 0;
         vga_row++;
     } else {
-        vga_buffer[vga_row * VGA_WIDTH + vga_col] = (VGA_COLOR << 8) | c;
+        vga_buffer[vga_row * VGA_WIDTH + vga_col] = (vga_color << 8) | c;
         vga_col++;
         if (vga_col >= VGA_WIDTH) {
             vga_col = 0;
@@ -67,22 +78,19 @@ void vga_putchar(char c) {
         }
     }
 
-    /* Scroll if needed */
     if (vga_row >= VGA_HEIGHT) {
         for (int i = 0; i < VGA_WIDTH * (VGA_HEIGHT - 1); i++) {
             vga_buffer[i] = vga_buffer[i + VGA_WIDTH];
         }
         for (int i = 0; i < VGA_WIDTH; i++) {
-            vga_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = (VGA_COLOR << 8) | ' ';
+            vga_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = (vga_color << 8) | ' ';
         }
         vga_row = VGA_HEIGHT - 1;
     }
 }
 
 void vga_puts(const char* str) {
-    while (*str) {
-        vga_putchar(*str++);
-    }
+    while (*str) vga_putchar(*str++);
 }
 
 void vga_put_hex(uint32_t value) {
@@ -93,19 +101,31 @@ void vga_put_hex(uint32_t value) {
     }
 }
 
+void vga_put_dec(uint32_t value) {
+    char buf[12];
+    int i = 0;
+    if (value == 0) {
+        vga_putchar('0');
+        return;
+    }
+    while (value > 0) {
+        buf[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+    while (i > 0) vga_putchar(buf[--i]);
+}
+
 /* ==========================================================================
- * PIT (Programmable Interval Timer) - Our heartbeat source
+ * Timer (PIT)
  * ========================================================================== */
 #define PIT_CH0_DATA    0x40
 #define PIT_CMD         0x43
-#define PIT_FREQUENCY   1193182  /* Base frequency in Hz */
+#define PIT_FREQUENCY   1193182
 
 static volatile uint32_t ticks = 0;
 
 void pit_init(uint32_t frequency) {
     uint32_t divisor = PIT_FREQUENCY / frequency;
-
-    /* Channel 0, lobyte/hibyte, rate generator */
     outb(PIT_CMD, 0x36);
     outb(PIT_CH0_DATA, divisor & 0xFF);
     outb(PIT_CH0_DATA, (divisor >> 8) & 0xFF);
@@ -115,15 +135,33 @@ uint32_t get_ticks(void) {
     return ticks;
 }
 
-/* PIT interrupt handler - called from IDT */
 void pit_handler(void) {
     ticks++;
-    /* Send EOI to PIC */
-    outb(0x20, 0x20);
+    outb(0x20, 0x20);  /* EOI */
 }
 
 /* ==========================================================================
- * IDT (Interrupt Descriptor Table) - How we react to hardware events
+ * Random Number Generator
+ * ========================================================================== */
+static uint32_t rng_state = 0xDEADBEEF;
+
+uint32_t random(void) {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
+
+void seed_random(void) {
+    rng_state = ticks;
+    rng_state ^= inb(0x40);
+    rng_state ^= inb(0x40) << 8;
+    rng_state ^= inb(0x40) << 16;
+    if (rng_state == 0) rng_state = 0xDEADBEEF;
+}
+
+/* ==========================================================================
+ * IDT Setup
  * ========================================================================== */
 struct idt_entry {
     uint16_t offset_low;
@@ -139,11 +177,9 @@ struct idt_ptr {
 } __attribute__((packed));
 
 static struct idt_entry idt[256];
-static struct idt_ptr   idtp;
+static struct idt_ptr idtp;
 
-/* Assembly stub for timer interrupt */
 extern void isr_timer_stub(void);
-
 __asm__(
     ".globl isr_timer_stub\n"
     "isr_timer_stub:\n"
@@ -155,180 +191,437 @@ __asm__(
 
 static void idt_set_entry(uint8_t num, uint32_t handler) {
     idt[num].offset_low  = handler & 0xFFFF;
-    idt[num].selector    = 0x08;  /* Kernel code segment */
+    idt[num].selector    = 0x08;
     idt[num].zero        = 0;
-    idt[num].type_attr   = 0x8E;  /* Present, ring 0, 32-bit interrupt gate */
+    idt[num].type_attr   = 0x8E;
     idt[num].offset_high = (handler >> 16) & 0xFFFF;
 }
 
 static void idt_init(void) {
     idtp.limit = sizeof(idt) - 1;
     idtp.base  = (uint32_t)&idt;
-
-    /* Clear all entries */
-    for (int i = 0; i < 256; i++) {
-        idt_set_entry(i, 0);
-    }
-
-    /* Set up timer interrupt (IRQ0 = INT 32) */
+    for (int i = 0; i < 256; i++) idt_set_entry(i, 0);
     idt_set_entry(32, (uint32_t)isr_timer_stub);
-
     idt_load(&idtp);
 }
 
 /* ==========================================================================
- * PIC (Programmable Interrupt Controller) - Route hardware interrupts
+ * PIC Setup
  * ========================================================================== */
-#define PIC1_CMD    0x20
-#define PIC1_DATA   0x21
-#define PIC2_CMD    0xA0
-#define PIC2_DATA   0xA1
-
 static void pic_init(void) {
-    /* ICW1: Start initialization sequence */
-    outb(PIC1_CMD, 0x11);
-    outb(PIC2_CMD, 0x11);
-    io_wait();
-
-    /* ICW2: Interrupt vector offsets (32 for master, 40 for slave) */
-    outb(PIC1_DATA, 32);
-    outb(PIC2_DATA, 40);
-    io_wait();
-
-    /* ICW3: Master/slave wiring */
-    outb(PIC1_DATA, 4);   /* Slave at IRQ2 */
-    outb(PIC2_DATA, 2);   /* Cascade identity */
-    io_wait();
-
-    /* ICW4: 8086 mode */
-    outb(PIC1_DATA, 0x01);
-    outb(PIC2_DATA, 0x01);
-    io_wait();
-
-    /* Mask all interrupts except IRQ0 (timer) */
-    outb(PIC1_DATA, 0xFE);  /* Enable only IRQ0 */
-    outb(PIC2_DATA, 0xFF);  /* Mask all slave IRQs */
+    outb(0x20, 0x11); outb(0xA0, 0x11); io_wait();
+    outb(0x21, 32);   outb(0xA1, 40);   io_wait();
+    outb(0x21, 4);    outb(0xA1, 2);    io_wait();
+    outb(0x21, 0x01); outb(0xA1, 0x01); io_wait();
+    outb(0x21, 0xFE); outb(0xA1, 0xFF);
 }
 
 /* ==========================================================================
- * Pseudo-Random Number Generator - For node ID
- * Uses a simple LFSR (Linear Feedback Shift Register)
+ * HMAC-like Authentication (SipHash-inspired, simplified)
  * ========================================================================== */
-static uint32_t rng_state = 0xDEADBEEF;
+static uint32_t swarm_secret[4] = {
+    SWARM_SECRET_0, SWARM_SECRET_1, SWARM_SECRET_2, SWARM_SECRET_3
+};
 
-static uint32_t random(void) {
-    /* Xorshift32 - fast and good enough for chaos */
-    rng_state ^= rng_state << 13;
-    rng_state ^= rng_state >> 17;
-    rng_state ^= rng_state << 5;
-    return rng_state;
+static uint32_t siphash_round(uint32_t v0, uint32_t v1, uint32_t v2, uint32_t v3) {
+    v0 += v1; v1 = (v1 << 5) | (v1 >> 27); v1 ^= v0;
+    v2 += v3; v3 = (v3 << 8) | (v3 >> 24); v3 ^= v2;
+    v0 += v3; v3 = (v3 << 7) | (v3 >> 25); v3 ^= v0;
+    v2 += v1; v1 = (v1 << 13) | (v1 >> 19); v1 ^= v2;
+    return v0 ^ v1 ^ v2 ^ v3;
 }
 
-static void seed_random(void) {
-    /* Use timer ticks + status register for entropy */
-    rng_state = ticks;
-    rng_state ^= inb(0x40);  /* PIT counter value */
-    rng_state ^= inb(0x40) << 8;
-    if (rng_state == 0) rng_state = 0xDEADBEEF;
+void compute_hmac(struct nanos_pheromone* pkt) {
+    uint32_t v0 = swarm_secret[0] ^ pkt->magic;
+    uint32_t v1 = swarm_secret[1] ^ pkt->node_id;
+    uint32_t v2 = swarm_secret[2] ^ (pkt->type | (pkt->ttl << 8));
+    uint32_t v3 = swarm_secret[3] ^ pkt->seq;
+
+    uint32_t hash = siphash_round(v0, v1, v2, v3);
+    hash = siphash_round(hash, v1, v2, v3);  /* Second round */
+
+    /* Store truncated HMAC */
+    pkt->hmac[0] = (hash >> 0) & 0xFF;
+    pkt->hmac[1] = (hash >> 8) & 0xFF;
+    pkt->hmac[2] = (hash >> 16) & 0xFF;
+    pkt->hmac[3] = (hash >> 24) & 0xFF;
+    hash = siphash_round(hash, v0, v2, v1);
+    pkt->hmac[4] = (hash >> 0) & 0xFF;
+    pkt->hmac[5] = (hash >> 8) & 0xFF;
+    pkt->hmac[6] = (hash >> 16) & 0xFF;
+    pkt->hmac[7] = (hash >> 24) & 0xFF;
+
+    pkt->flags |= FLAG_AUTHENTICATED;
 }
 
-/* ==========================================================================
- * Pheromone Processing - React to swarm signals
- * ========================================================================== */
-static uint8_t compute_checksum(struct nanos_pheromone* pkt) {
-    uint8_t* data = (uint8_t*)pkt;
-    uint8_t checksum = 0;
+bool verify_hmac(struct nanos_pheromone* pkt) {
+    uint8_t saved_hmac[HMAC_TAG_SIZE];
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) {
+        saved_hmac[i] = pkt->hmac[i];
+    }
 
-    /* XOR all bytes except checksum field itself */
-    for (size_t i = 0; i < sizeof(*pkt); i++) {
-        if (i != offsetof(struct nanos_pheromone, checksum)) {
-            checksum ^= data[i];
+    compute_hmac(pkt);
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) {
+        if (pkt->hmac[i] != saved_hmac[i]) {
+            return false;
         }
     }
-    return checksum;
+    return true;
 }
 
+bool is_authenticated_type(uint8_t type) {
+    return type == PHEROMONE_DIE ||
+           type == PHEROMONE_QUEEN_CMD ||
+           type == PHEROMONE_REBIRTH;
+}
+
+/* ==========================================================================
+ * Gossip Protocol - Prevent Broadcast Storms
+ * ========================================================================== */
+uint32_t gossip_hash(struct nanos_pheromone* pkt) {
+    /* Simple hash of identifying fields */
+    uint32_t h = pkt->node_id;
+    h = h * 31 + pkt->seq;
+    h = h * 31 + pkt->type;
+    h = h * 31 + (pkt->payload[0] | (pkt->payload[1] << 8));
+    return h;
+}
+
+void gossip_record(struct nanos_pheromone* pkt) {
+    uint32_t hash = gossip_hash(pkt);
+
+    /* Check if already in cache */
+    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
+        if (g_state.gossip_cache[i].hash == hash) {
+            g_state.gossip_cache[i].count++;
+            return;
+        }
+    }
+
+    /* Add to cache (circular) */
+    struct gossip_entry* entry = &g_state.gossip_cache[g_state.gossip_index];
+    entry->hash = hash;
+    entry->timestamp = ticks;
+    entry->count = 1;
+    entry->relayed = 0;
+
+    g_state.gossip_index = (g_state.gossip_index + 1) % GOSSIP_CACHE_SIZE;
+}
+
+bool gossip_should_relay(struct nanos_pheromone* pkt) {
+    uint32_t hash = gossip_hash(pkt);
+
+    /* Look up in cache */
+    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
+        struct gossip_entry* entry = &g_state.gossip_cache[i];
+
+        if (entry->hash == hash) {
+            /* Message still fresh? */
+            if (ticks - entry->timestamp > (GOSSIP_IMMUNITY_MS / 10)) {
+                entry->count = 1;  /* Reset - old message */
+                entry->timestamp = ticks;
+            }
+
+            /* Already relayed? */
+            if (entry->relayed) {
+                return false;
+            }
+
+            /* Too many copies seen? */
+            if (entry->count >= ALARM_MAX_ECHOES) {
+                g_state.packets_dropped++;
+                return false;
+            }
+
+            /* Probabilistic relay - decay with each copy seen */
+            uint32_t prob = GOSSIP_PROB_BASE;
+            for (uint8_t j = 1; j < entry->count && prob > 0; j++) {
+                prob = (prob * (100 - GOSSIP_PROB_DECAY)) / 100;
+            }
+
+            if ((random() % 100) < prob) {
+                entry->relayed = 1;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /* Not in cache - first time seeing it, relay */
+    return true;
+}
+
+/* ==========================================================================
+ * Cell Role Management
+ * ========================================================================== */
+static const char* role_name(uint8_t role) {
+    switch (role) {
+        case ROLE_WORKER:   return "WORKER";
+        case ROLE_EXPLORER: return "EXPLORER";
+        case ROLE_SENTINEL: return "SENTINEL";
+        case ROLE_QUEEN:    return "QUEEN";
+        default:            return "UNKNOWN";
+    }
+}
+
+static uint8_t determine_role(void) {
+    uint32_t r = random();
+
+    /* Queen: 1 in 256 */
+    if ((r & 0xFF) == 0) {
+        return ROLE_QUEEN;
+    }
+
+    /* Explorer: 1 in 8 */
+    if ((r & 0x07) == 1) {
+        return ROLE_EXPLORER;
+    }
+
+    /* Sentinel: 1 in 8 */
+    if ((r & 0x07) == 2) {
+        return ROLE_SENTINEL;
+    }
+
+    /* Default: Worker */
+    return ROLE_WORKER;
+}
+
+static uint32_t heartbeat_interval(void) {
+    switch (g_state.role) {
+        case ROLE_EXPLORER: return 50;   /* Fast: every 0.5s */
+        case ROLE_SENTINEL: return 200;  /* Slow: every 2s */
+        case ROLE_QUEEN:    return 300;  /* Very slow: every 3s */
+        default:            return 100;  /* Normal: every 1s */
+    }
+}
+
+/* ==========================================================================
+ * Apoptosis - Programmed Cell Death and Rebirth
+ * ========================================================================== */
+void cell_apoptosis(void) {
+    vga_set_color(0x0C);  /* Red */
+    vga_puts("\n!!! APOPTOSIS TRIGGERED !!!\n");
+    vga_puts("    Reason: ");
+
+    if (heap_usage_percent() >= HEAP_CRITICAL_PCT) {
+        vga_puts("Memory exhaustion (");
+        vga_put_dec(heap_usage_percent());
+        vga_puts("%)\n");
+    } else if (ticks - g_state.boot_time > MAX_CELL_LIFETIME) {
+        vga_puts("Maximum lifetime reached\n");
+    } else {
+        vga_puts("Unknown\n");
+    }
+
+    /* Emit farewell pheromone */
+    struct nanos_pheromone pkt;
+    pkt.magic   = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type    = PHEROMONE_REBIRTH;
+    pkt.ttl     = 2;
+    pkt.flags   = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq     = g_state.seq_counter++;
+
+    /* Payload: our stats before death */
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = g_state.packets_rx; p += 4;
+    *(uint32_t*)p = g_state.packets_tx; p += 4;
+    *(uint32_t*)p = g_state.generation; p += 4;
+
+    compute_hmac(&pkt);
+    e1000_send(&pkt, sizeof(pkt));
+
+    /* Wait for TX to complete */
+    for (volatile int i = 0; i < 100000; i++);
+
+    /* REBIRTH */
+    vga_puts("    Rebirthing...\n");
+
+    /* Save generation and increment */
+    uint32_t old_gen = g_state.generation;
+
+    /* Reset heap */
+    heap_reset();
+
+    /* Clear gossip cache */
+    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
+        g_state.gossip_cache[i].hash = 0;
+        g_state.gossip_cache[i].count = 0;
+    }
+
+    /* Generate new identity */
+    seed_random();
+    g_state.node_id = random();
+    g_state.role = determine_role();
+    g_state.generation = old_gen + 1;
+    g_state.boot_time = ticks;
+    g_state.last_heartbeat = ticks;
+    g_state.seq_counter = 0;
+    g_state.packets_rx = 0;
+    g_state.packets_tx = 0;
+    g_state.packets_dropped = 0;
+    g_state.neighbors_seen = 0;
+    g_state.alarms_relayed = 0;
+
+    vga_set_color(0x0A);  /* Back to green */
+    vga_puts("    New Node ID: ");
+    vga_put_hex(g_state.node_id);
+    vga_puts("\n    New Role: ");
+    vga_puts(role_name(g_state.role));
+    vga_puts("\n    Generation: ");
+    vga_put_dec(g_state.generation);
+    vga_puts("\n\n");
+}
+
+/* ==========================================================================
+ * Pheromone Processing
+ * ========================================================================== */
 void process_pheromone(struct nanos_pheromone* pkt) {
-    /* Validate magic */
-    if (pkt->magic != NANOS_MAGIC) {
-        return;  /* Not our protocol, ignore */
-    }
-
-    /* Validate checksum */
-    if (compute_checksum(pkt) != pkt->checksum) {
-        return;  /* Corrupted, ignore */
-    }
-
-    /* Don't process our own messages */
-    if (pkt->node_id == g_state.node_id) {
+    /* Validate magic and version */
+    if (pkt->magic != NANOS_MAGIC) return;
+    if (pkt->version != NANOS_VERSION && pkt->version != 0) {
+        /* Incompatible version - quarantine */
         return;
     }
 
-    g_state.packets_rx++;
+    /* Don't process our own messages */
+    if (pkt->node_id == g_state.node_id) return;
 
-    /* React based on pheromone type */
-    switch (pkt->type) {
-        case PHEROMONE_HELLO:
-            /* Another cell says hi - we could track neighbors here */
-            g_state.neighbors_seen++;
-            vga_puts("< HELLO from ");
+    /* Security check for critical messages */
+    if (is_authenticated_type(pkt->type)) {
+        if (!(pkt->flags & FLAG_AUTHENTICATED)) {
+            vga_set_color(0x0E);  /* Yellow warning */
+            vga_puts("! Rejected unauthenticated ");
+            vga_put_hex(pkt->type);
+            vga_puts(" from ");
             vga_put_hex(pkt->node_id);
             vga_puts("\n");
+            vga_set_color(0x0A);
+            return;
+        }
+
+        if (!verify_hmac(pkt)) {
+            vga_set_color(0x0C);  /* Red alert */
+            vga_puts("!! INVALID HMAC from ");
+            vga_put_hex(pkt->node_id);
+            vga_puts(" - possible attack!\n");
+            vga_set_color(0x0A);
+            return;
+        }
+    }
+
+    /* Record in gossip cache */
+    gossip_record(pkt);
+
+    g_state.packets_rx++;
+
+    /* Process by type */
+    switch (pkt->type) {
+        case PHEROMONE_HELLO:
+            g_state.neighbors_seen++;
+            if (g_state.role == ROLE_SENTINEL) {
+                /* Sentinels log all contacts */
+                vga_puts("< [");
+                vga_puts(role_name(PKT_GET_ROLE(pkt)));
+                vga_puts("] ");
+                vga_put_hex(pkt->node_id);
+                vga_puts("\n");
+            }
             break;
 
         case PHEROMONE_DATA:
-            /* Data payload - print it */
             vga_puts("< DATA: ");
-            pkt->payload[51] = '\0';  /* Ensure null termination */
+            pkt->payload[39] = '\0';
             vga_puts((char*)pkt->payload);
             vga_puts("\n");
             break;
 
         case PHEROMONE_ALARM:
-            /* Danger! Propagate if TTL > 0 */
+            vga_set_color(0x0C);  /* Red */
             vga_puts("! ALARM from ");
             vga_put_hex(pkt->node_id);
+            vga_puts(" TTL=");
+            vga_put_dec(pkt->ttl);
             vga_puts("\n");
-            if (pkt->ttl > 0) {
+            vga_set_color(0x0A);
+
+            /* Relay using gossip protocol */
+            if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
                 pkt->ttl--;
-                pkt->checksum = compute_checksum(pkt);
+                pkt->seq = g_state.seq_counter++;  /* Our seq for dedup */
                 e1000_send(pkt, sizeof(*pkt));
+                g_state.alarms_relayed++;
             }
             break;
 
+        case PHEROMONE_QUEEN_CMD:
+            if (PKT_GET_ROLE(pkt) != ROLE_QUEEN) {
+                vga_puts("! Non-queen sent QUEEN_CMD - ignoring\n");
+                break;
+            }
+            vga_set_color(0x0D);  /* Magenta - queen commands */
+            vga_puts(">> QUEEN COMMAND: ");
+            pkt->payload[39] = '\0';
+            vga_puts((char*)pkt->payload);
+            vga_puts("\n");
+            vga_set_color(0x0A);
+            break;
+
+        case PHEROMONE_REBIRTH:
+            vga_set_color(0x0E);  /* Yellow */
+            vga_puts("~ Cell ");
+            vga_put_hex(pkt->node_id);
+            vga_puts(" died (gen ");
+            vga_put_dec(*(uint32_t*)(pkt->payload + 8));
+            vga_puts(")\n");
+            vga_set_color(0x0A);
+            break;
+
         case PHEROMONE_DIE:
-            /* Graceful shutdown requested */
-            vga_puts("X DIE command received - halting\n");
-            for (;;) cpu_halt();
+            /* Authenticated DIE command - only queens can send */
+            if (PKT_GET_ROLE(pkt) == ROLE_QUEEN) {
+                vga_set_color(0x0C);
+                vga_puts("X DIE from Queen - halting\n");
+                for (;;) cpu_halt();
+            }
             break;
 
         default:
-            /* Unknown pheromone type - ignore */
             break;
     }
 }
 
 /* ==========================================================================
- * Heartbeat Emission - "I exist"
+ * Heartbeat Emission
  * ========================================================================== */
-#define HEARTBEAT_INTERVAL  100  /* Ticks between heartbeats (~1 second at 100Hz) */
-
 void emit_heartbeat(void) {
     struct nanos_pheromone pkt;
 
     pkt.magic   = NANOS_MAGIC;
     pkt.node_id = g_state.node_id;
     pkt.type    = PHEROMONE_HELLO;
-    pkt.ttl     = 1;  /* Don't propagate heartbeats */
+    pkt.ttl     = 1;
     pkt.flags   = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq     = g_state.seq_counter++;
 
-    /* Put some stats in payload */
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Stats in payload */
     uint8_t* p = pkt.payload;
-    *(uint32_t*)p = g_state.packets_rx;  p += 4;
-    *(uint32_t*)p = g_state.packets_tx;  p += 4;
-    *(uint32_t*)p = ticks;               p += 4;
+    *(uint32_t*)p = g_state.packets_rx; p += 4;
+    *(uint32_t*)p = g_state.packets_tx; p += 4;
+    *(uint32_t*)p = ticks;              p += 4;
+    *(uint32_t*)p = g_state.generation; p += 4;
+    *p++ = heap_usage_percent();
+    *p++ = g_state.role;
+    *p++ = e1000_tx_queue_depth();
 
-    pkt.checksum = compute_checksum(&pkt);
+    /* Zero HMAC for non-critical message */
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
 
     if (e1000_send(&pkt, sizeof(pkt)) == 0) {
         g_state.packets_tx++;
@@ -338,88 +631,95 @@ void emit_heartbeat(void) {
 }
 
 /* ==========================================================================
- * Main Reactive Loop - The cell's life cycle
+ * Main Reactive Loop
  * ========================================================================== */
 void nanos_loop(void) {
     static uint8_t rx_buffer[2048];
 
     for (;;) {
-        /* Check for incoming pheromones */
-        if (e1000_has_packet()) {
+        /* Check for apoptosis conditions */
+        if (heap_usage_percent() >= HEAP_CRITICAL_PCT ||
+            ticks - g_state.boot_time > MAX_CELL_LIFETIME) {
+            cell_apoptosis();
+        }
+
+        /* Drain TX queue (non-blocking) */
+        e1000_tx_drain();
+
+        /* Process incoming packets */
+        while (e1000_has_packet()) {
             int len = e1000_receive(rx_buffer, sizeof(rx_buffer));
             if (len >= (int)(sizeof(struct eth_header) + sizeof(struct nanos_pheromone))) {
-                /* Skip Ethernet header, process pheromone */
-                struct nanos_pheromone* pkt = (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
+                struct nanos_pheromone* pkt =
+                    (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
                 process_pheromone(pkt);
             }
         }
 
-        /* Emit heartbeat periodically */
-        if (ticks - g_state.last_heartbeat >= HEARTBEAT_INTERVAL) {
+        /* Emit heartbeat based on role */
+        if (ticks - g_state.last_heartbeat >= heartbeat_interval()) {
             emit_heartbeat();
         }
 
-        /* Sleep until next interrupt - conserve energy */
+        /* Sleep until next interrupt */
         cpu_halt();
     }
 }
 
 /* ==========================================================================
- * Kernel Entry Point - The cell awakens
+ * Kernel Entry Point
  * ========================================================================== */
 void kernel_main(uint32_t magic, void* mb_info) {
-    (void)mb_info;  /* Not used for now */
+    (void)mb_info;
 
-    /* Clear screen first */
     vga_clear();
 
-    /* Verify we were loaded by a Multiboot2 bootloader */
     if (magic != MULTIBOOT2_MAGIC) {
-        vga_puts("ERROR: Not loaded by Multiboot2 bootloader!\n");
-        vga_puts("Expected: ");
-        vga_put_hex(MULTIBOOT2_MAGIC);
-        vga_puts(" Got: ");
-        vga_put_hex(magic);
-        vga_puts("\n");
+        vga_puts("ERROR: Not Multiboot2!\n");
         for (;;) cpu_halt();
     }
 
     /* Banner */
+    vga_set_color(0x0B);  /* Cyan */
     vga_puts("========================================\n");
-    vga_puts("  NanOS v0.1 - The Hive Mind Awakens\n");
+    vga_puts("  NanOS v0.2 - Hive Mind with Immunity\n");
     vga_puts("========================================\n\n");
+    vga_set_color(0x0A);
 
-    /* Initialize GDT */
+    /* Initialize hardware */
     vga_puts("[*] Loading GDT...\n");
     gdt_load();
 
-    /* Initialize IDT and PIC */
     vga_puts("[*] Initializing interrupts...\n");
     pic_init();
     idt_init();
 
-    /* Initialize timer (100 Hz) */
-    vga_puts("[*] Starting heartbeat timer (100 Hz)...\n");
+    vga_puts("[*] Starting timer (100 Hz)...\n");
     pit_init(100);
-
-    /* Enable interrupts */
     interrupts_enable();
 
-    /* Wait a bit for entropy, then seed RNG */
+    /* Wait for entropy */
     while (ticks < 10) cpu_halt();
     seed_random();
 
-    /* Generate our unique node ID */
+    /* Generate identity */
     g_state.node_id = random();
+    g_state.role = determine_role();
+    g_state.generation = 0;
+    g_state.heap_size = HEAP_SIZE;
+
     vga_puts("[*] Node ID: ");
     vga_put_hex(g_state.node_id);
+    vga_puts("\n[*] Role: ");
+    vga_set_color(g_state.role == ROLE_QUEEN ? 0x0D : 0x0A);
+    vga_puts(role_name(g_state.role));
+    vga_set_color(0x0A);
     vga_puts("\n");
 
     /* Initialize network */
     vga_puts("[*] Initializing e1000 NIC...\n");
     if (e1000_init() != 0) {
-        vga_puts("ERROR: Failed to initialize network!\n");
-        vga_puts("       Running in isolated mode.\n");
+        vga_puts("ERROR: Network init failed!\n");
     } else {
         uint8_t mac[6];
         e1000_get_mac(mac);
@@ -436,13 +736,30 @@ void kernel_main(uint32_t magic, void* mb_info) {
     /* Initialize state */
     g_state.boot_time = ticks;
     g_state.last_heartbeat = 0;
+    g_state.seq_counter = 0;
     g_state.packets_rx = 0;
     g_state.packets_tx = 0;
+    g_state.packets_dropped = 0;
     g_state.neighbors_seen = 0;
+    g_state.alarms_relayed = 0;
+    g_state.gossip_index = 0;
 
-    vga_puts("\n[*] Cell is alive. Entering reactive loop.\n");
-    vga_puts("    Listening for pheromones...\n\n");
+    /* Clear gossip cache */
+    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
+        g_state.gossip_cache[i].hash = 0;
+    }
 
-    /* Enter the main reactive loop */
+    vga_puts("\n[*] Cell alive. Features:\n");
+    vga_puts("    - Gossip protocol (anti-storm)\n");
+    vga_puts("    - HMAC authentication\n");
+    vga_puts("    - Role specialization\n");
+    vga_puts("    - Apoptosis at ");
+    vga_put_dec(HEAP_CRITICAL_PCT);
+    vga_puts("% heap or ");
+    vga_put_dec(MAX_CELL_LIFETIME / 100);
+    vga_puts("s\n\n");
+
+    vga_puts("Listening for pheromones...\n\n");
+
     nanos_loop();
 }
