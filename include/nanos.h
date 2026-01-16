@@ -18,6 +18,7 @@ typedef signed short       int16_t;
 typedef signed int         int32_t;
 typedef signed long long   int64_t;
 typedef uint32_t           size_t;
+typedef uint32_t           uintptr_t;
 typedef _Bool              bool;
 #define true  1
 #define false 0
@@ -41,6 +42,23 @@ typedef _Bool              bool;
 #define PHEROMONE_CORONATION 0x06   /* New queen announcement */
 #define PHEROMONE_QUERY     0x07    /* Request for routing */
 #define PHEROMONE_QUEEN_CMD 0x10    /* Command from queen */
+
+/* Workload pheromones */
+#define PHEROMONE_KV_SET    0x20    /* Key-Value store: SET */
+#define PHEROMONE_KV_GET    0x21    /* Key-Value store: GET request */
+#define PHEROMONE_KV_REPLY  0x22    /* Key-Value store: GET response */
+#define PHEROMONE_TASK      0x30    /* Distributed task from queen */
+#define PHEROMONE_RESULT    0x31    /* Task result from worker */
+#define PHEROMONE_SENSOR    0x40    /* Sensor data report */
+#define PHEROMONE_AGGREGATE 0x41    /* Aggregated sensor stats */
+
+/* Global Compute pheromones - MapReduce style */
+#define PHEROMONE_JOB_START 0x50    /* New global job announcement */
+#define PHEROMONE_JOB_CHUNK 0x51    /* Work chunk assignment */
+#define PHEROMONE_JOB_DONE  0x52    /* Chunk completion report */
+#define PHEROMONE_JOB_RESULT 0x53   /* Final aggregated result */
+#define PHEROMONE_JOB_STATUS 0x54   /* Job status query/response */
+
 #define PHEROMONE_REBIRTH   0xFE    /* Cell death notification */
 #define PHEROMONE_DIE       0xFF    /* Kill command */
 
@@ -101,6 +119,37 @@ typedef _Bool              bool;
  * ========================================================================== */
 #define HEAP_CRITICAL_PCT   90
 #define MAX_CELL_LIFETIME   360000
+
+/* ==========================================================================
+ * Workload Constants
+ * ========================================================================== */
+/* Key-Value Store */
+#define KV_STORE_SIZE       8       /* Key-value pairs per node */
+#define KV_KEY_SIZE         8       /* Max key length */
+#define KV_VALUE_SIZE       16      /* Max value length */
+#define KV_REPLICATION      2       /* Replicate to N neighbors */
+
+/* Task Distribution */
+#define TASK_PRIME_CHECK    0x01    /* Check if number is prime */
+#define TASK_FACTORIAL      0x02    /* Calculate factorial */
+#define TASK_FIBONACCI      0x03    /* Calculate fibonacci */
+#define MAX_PENDING_TASKS   4       /* Tasks waiting for results */
+
+/* Sensor Network */
+#define SENSOR_INTERVAL     200     /* Generate sensor data every 2s */
+#define SENSOR_TYPES        3       /* Temperature, humidity, pressure */
+#define AGGREGATE_INTERVAL  500     /* Aggregate every 5s */
+
+/* Global Compute - MapReduce style distributed computing */
+#define JOB_PRIME_SEARCH    0x01    /* Find primes in range */
+#define JOB_MONTE_CARLO_PI  0x02    /* Estimate Pi with Monte Carlo */
+#define JOB_HASH_SEARCH     0x03    /* Find hash preimage (educational) */
+#define JOB_REDUCE_SUM      0x04    /* Parallel sum reduction */
+#define JOB_WORD_COUNT      0x05    /* Distributed word frequency */
+
+#define MAX_ACTIVE_JOBS     2       /* Jobs in flight simultaneously */
+#define MAX_JOB_CHUNKS      16      /* Chunks per job */
+#define CHUNK_TIMEOUT       500     /* 5 seconds to complete chunk */
 
 /* ==========================================================================
  * The Pheromone Packet v0.3 - 64 bytes with gradient support
@@ -236,16 +285,71 @@ struct nanos_state {
     /* Memory health */
     uint32_t heap_used;
     uint32_t heap_size;
+
+    /* ==========================================================================
+     * Workload State
+     * ========================================================================== */
+    /* Key-Value Store */
+    struct {
+        uint8_t  key[KV_KEY_SIZE];
+        uint8_t  value[KV_VALUE_SIZE];
+        uint8_t  valid;
+    } kv_store[KV_STORE_SIZE];
+    uint8_t kv_count;
+
+    /* Task Distribution (queen only) */
+    struct {
+        uint32_t task_id;
+        uint8_t  task_type;
+        uint32_t input;
+        uint32_t assigned_to;
+        uint32_t sent_at;
+        uint8_t  completed;
+        uint32_t result;
+    } pending_tasks[MAX_PENDING_TASKS];
+    uint32_t tasks_sent;
+    uint32_t tasks_completed;
+
+    /* Sensor Network */
+    uint32_t last_sensor_reading;
+    uint32_t last_aggregate;
+    struct {
+        int32_t  value;          /* Current sensor value */
+        int32_t  sum;            /* Sum for averaging */
+        int32_t  min;
+        int32_t  max;
+        uint32_t count;          /* Readings received */
+    } sensors[SENSOR_TYPES];     /* 0=temp, 1=humidity, 2=pressure */
+
+    /* Global Compute - MapReduce Jobs */
+    struct {
+        uint32_t job_id;            /* Unique job identifier */
+        uint8_t  job_type;          /* JOB_* constant */
+        uint8_t  active;            /* Is this job running? */
+        uint32_t param1;            /* Job-specific param (e.g., range start) */
+        uint32_t param2;            /* Job-specific param (e.g., range end) */
+        uint32_t chunks_total;      /* Total chunks in job */
+        uint32_t chunks_done;       /* Completed chunks */
+        uint64_t result;            /* Aggregated result */
+        uint32_t started_at;        /* When job started */
+        uint32_t coordinator_id;    /* Node responsible for aggregation */
+    } active_jobs[MAX_ACTIVE_JOBS];
+
+    /* Current chunk being processed */
+    struct {
+        uint32_t job_id;
+        uint8_t  job_type;
+        uint32_t chunk_id;
+        uint32_t range_start;
+        uint32_t range_end;
+        uint8_t  processing;
+    } current_chunk;
+
+    uint32_t jobs_completed;
+    uint32_t chunks_processed;
 };
 
 extern struct nanos_state g_state;
-
-/* ==========================================================================
- * Simple Boolean Type
- * ========================================================================== */
-typedef uint8_t bool;
-#define true  1
-#define false 0
 
 /* ==========================================================================
  * Memory Functions
@@ -297,6 +401,7 @@ void gradient_update(struct nanos_pheromone* pkt);
 void gradient_propagate(void);
 uint32_t route_next_hop(uint32_t dest_id);
 int route_send(uint32_t dest_id, uint8_t type, uint8_t* data, uint8_t len);
+void route_forward(struct nanos_pheromone* pkt);
 
 /* ==========================================================================
  * Security Functions

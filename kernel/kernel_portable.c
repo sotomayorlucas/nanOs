@@ -341,7 +341,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 
         case PHEROMONE_DATA:
             hal_console_puts("< DATA: ");
-            pkt->payload[39] = '\0';
+            pkt->payload[31] = '\0';
             hal_console_puts((char*)pkt->payload);
             hal_console_puts("\n");
             break;

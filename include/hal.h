@@ -17,7 +17,9 @@
  * Architecture Detection
  * ========================================================================== */
 #if defined(__x86_64__) || defined(__i386__) || defined(__i686__)
-    #define ARCH_X86
+    #ifndef ARCH_X86
+        #define ARCH_X86
+    #endif
     #define ARCH_NAME "x86"
 #elif defined(__aarch64__)
     #define ARCH_ARM64

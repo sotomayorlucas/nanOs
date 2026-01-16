@@ -10,6 +10,7 @@
 
 #include "../include/e1000.h"
 #include "../include/io.h"
+#include "../include/hal.h"
 
 /* ==========================================================================
  * Software TX Queue - Non-blocking transmission

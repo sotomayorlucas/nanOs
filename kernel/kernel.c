@@ -192,6 +192,103 @@ __asm__(
     "    iret\n"
 );
 
+/* ==========================================================================
+ * Keyboard Input Handler
+ * ========================================================================== */
+#define KB_DATA_PORT    0x60
+#define KB_STATUS_PORT  0x64
+
+static volatile char kb_buffer[16];
+static volatile uint8_t kb_head = 0;
+static volatile uint8_t kb_tail = 0;
+
+/* Simple scancode to ASCII (US layout, lowercase only) */
+static const char scancode_to_ascii[128] = {
+    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
+    0, 'a','s','d','f','g','h','j','k','l',';','\'','`',
+    0, '\\','z','x','c','v','b','n','m',',','.','/', 0,
+    '*', 0, ' '
+};
+
+void keyboard_handler(void) {
+    uint8_t scancode = inb(KB_DATA_PORT);
+
+    /* Only process key press (not release) */
+    if (scancode < 128) {
+        char c = scancode_to_ascii[scancode];
+        if (c != 0) {
+            uint8_t next = (kb_head + 1) % 16;
+            if (next != kb_tail) {
+                kb_buffer[kb_head] = c;
+                kb_head = next;
+            }
+        }
+    }
+
+    outb(0x20, 0x20);  /* EOI */
+}
+
+static char kb_getchar(void) {
+    if (kb_head == kb_tail) return 0;
+    char c = kb_buffer[kb_tail];
+    kb_tail = (kb_tail + 1) % 16;
+    return c;
+}
+
+extern void isr_keyboard_stub(void);
+__asm__(
+    ".globl isr_keyboard_stub\n"
+    "isr_keyboard_stub:\n"
+    "    pusha\n"
+    "    call keyboard_handler\n"
+    "    popa\n"
+    "    iret\n"
+);
+
+/* ==========================================================================
+ * Serial Port (COM1) for Logging
+ * ========================================================================== */
+#define COM1_PORT       0x3F8
+
+static void serial_init(void) {
+    outb(COM1_PORT + 1, 0x00);  /* Disable interrupts */
+    outb(COM1_PORT + 3, 0x80);  /* Enable DLAB */
+    outb(COM1_PORT + 0, 0x03);  /* 38400 baud (low byte) */
+    outb(COM1_PORT + 1, 0x00);  /* (high byte) */
+    outb(COM1_PORT + 3, 0x03);  /* 8 bits, no parity, 1 stop */
+    outb(COM1_PORT + 2, 0xC7);  /* Enable FIFO */
+    outb(COM1_PORT + 4, 0x0B);  /* IRQs enabled, RTS/DSR set */
+}
+
+static void serial_putchar(char c) {
+    while ((inb(COM1_PORT + 5) & 0x20) == 0);
+    outb(COM1_PORT, c);
+}
+
+static void serial_puts(const char* str) {
+    while (*str) serial_putchar(*str++);
+}
+
+static void serial_put_hex(uint32_t value) {
+    const char* hex = "0123456789ABCDEF";
+    serial_puts("0x");
+    for (int i = 28; i >= 0; i -= 4) {
+        serial_putchar(hex[(value >> i) & 0xF]);
+    }
+}
+
+static void serial_put_dec(uint32_t value) {
+    char buf[12];
+    int i = 0;
+    if (value == 0) { serial_putchar('0'); return; }
+    while (value > 0) {
+        buf[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+    while (i > 0) serial_putchar(buf[--i]);
+}
+
 static void idt_set_entry(uint8_t num, uint32_t handler) {
     idt[num].offset_low  = handler & 0xFFFF;
     idt[num].selector    = 0x08;
@@ -205,6 +302,7 @@ static void idt_init(void) {
     idtp.base  = (uint32_t)&idt;
     for (int i = 0; i < 256; i++) idt_set_entry(i, 0);
     idt_set_entry(32, (uint32_t)isr_timer_stub);
+    idt_set_entry(33, (uint32_t)isr_keyboard_stub);  /* IRQ1 = keyboard */
     idt_load(&idtp);
 }
 
@@ -216,7 +314,7 @@ static void pic_init(void) {
     outb(0x21, 32);   outb(0xA1, 40);   io_wait();
     outb(0x21, 4);    outb(0xA1, 2);    io_wait();
     outb(0x21, 0x01); outb(0xA1, 0x01); io_wait();
-    outb(0x21, 0xFE); outb(0xA1, 0xFF);
+    outb(0x21, 0xFC); outb(0xA1, 0xFF);  /* Enable IRQ0 (timer) and IRQ1 (keyboard) */
 }
 
 /* ==========================================================================
@@ -402,6 +500,1247 @@ static uint32_t heartbeat_interval(void) {
 }
 
 /* ==========================================================================
+ * Interactive Commands
+ * ========================================================================== */
+
+/* Show swarm status */
+static void cmd_show_status(void) {
+    vga_set_color(0x0B);  /* Cyan */
+    vga_puts("\n========== SWARM STATUS ==========\n");
+    vga_set_color(0x0A);
+
+    /* Node identity */
+    vga_puts("Node ID: ");
+    vga_put_hex(g_state.node_id);
+    vga_puts("  Role: ");
+    vga_set_color(g_state.role == ROLE_QUEEN ? 0x0D : 0x0E);
+    vga_puts(role_name(g_state.role));
+    vga_set_color(0x0A);
+    vga_puts("  Gen: ");
+    vga_put_dec(g_state.generation);
+    vga_puts("\n");
+
+    /* Network stats */
+    vga_puts("Packets: RX=");
+    vga_put_dec(g_state.packets_rx);
+    vga_puts(" TX=");
+    vga_put_dec(g_state.packets_tx);
+    vga_puts(" Dropped=");
+    vga_put_dec(g_state.packets_dropped);
+    vga_puts(" Routed=");
+    vga_put_dec(g_state.packets_routed);
+    vga_puts("\n");
+
+    /* Queen info */
+    vga_puts("Queen: ");
+    if (g_state.known_queen_id != 0) {
+        vga_put_hex(g_state.known_queen_id);
+        vga_puts(" (distance=");
+        vga_put_dec(g_state.distance_to_queen);
+        vga_puts(")\n");
+    } else {
+        vga_puts("NONE\n");
+    }
+
+    /* Neighbor table */
+    vga_puts("Neighbors: ");
+    vga_put_dec(g_state.neighbor_count);
+    vga_puts("/");
+    vga_put_dec(NEIGHBOR_TABLE_SIZE);
+    vga_puts("\n");
+
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+        if (g_state.neighbors[i].node_id != 0) {
+            vga_puts("  ");
+            vga_put_hex(g_state.neighbors[i].node_id);
+            vga_puts(" [");
+            vga_puts(role_name(g_state.neighbors[i].role));
+            vga_puts("] d=");
+            vga_put_dec(g_state.neighbors[i].distance);
+            vga_puts(" pkts=");
+            vga_put_dec(g_state.neighbors[i].packets);
+            vga_puts("\n");
+        }
+    }
+
+    /* Role distribution */
+    vga_puts("Roles: W=");
+    vga_put_dec(g_state.role_counts[ROLE_WORKER]);
+    vga_puts(" E=");
+    vga_put_dec(g_state.role_counts[ROLE_EXPLORER]);
+    vga_puts(" S=");
+    vga_put_dec(g_state.role_counts[ROLE_SENTINEL]);
+    vga_puts(" Q=");
+    vga_put_dec(g_state.role_counts[ROLE_QUEEN]);
+    vga_puts("\n");
+
+    /* Memory */
+    vga_puts("Heap: ");
+    vga_put_dec(heap_usage_percent());
+    vga_puts("% (");
+    vga_put_dec(heap_ptr);
+    vga_puts("/");
+    vga_put_dec(HEAP_SIZE);
+    vga_puts(")\n");
+
+    /* Uptime */
+    vga_puts("Uptime: ");
+    vga_put_dec((ticks - g_state.boot_time) / 100);
+    vga_puts("s\n");
+
+    vga_set_color(0x0B);
+    vga_puts("==================================\n\n");
+    vga_set_color(0x0A);
+
+    /* Also log to serial */
+    serial_puts("[STATUS] Node=");
+    serial_put_hex(g_state.node_id);
+    serial_puts(" Role=");
+    serial_puts(role_name(g_state.role));
+    serial_puts(" Neighbors=");
+    serial_put_dec(g_state.neighbor_count);
+    serial_puts(" RX=");
+    serial_put_dec(g_state.packets_rx);
+    serial_puts(" TX=");
+    serial_put_dec(g_state.packets_tx);
+    serial_puts("\n");
+}
+
+/* Send DATA message to swarm */
+static void cmd_send_data(void) {
+    static uint32_t data_counter = 0;
+
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_DATA;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;  /* Broadcast */
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Create message */
+    char* msg = (char*)pkt.payload;
+    const char* prefix = "Hello from ";
+    int i = 0;
+    while (*prefix && i < 20) msg[i++] = *prefix++;
+
+    /* Add node ID (hex, short) */
+    const char* hex = "0123456789ABCDEF";
+    uint32_t id = g_state.node_id;
+    msg[i++] = hex[(id >> 28) & 0xF];
+    msg[i++] = hex[(id >> 24) & 0xF];
+    msg[i++] = hex[(id >> 20) & 0xF];
+    msg[i++] = hex[(id >> 16) & 0xF];
+    msg[i++] = ' ';
+    msg[i++] = '#';
+
+    /* Add counter */
+    uint32_t c = data_counter++;
+    char num[8];
+    int j = 0;
+    if (c == 0) num[j++] = '0';
+    while (c > 0 && j < 8) { num[j++] = '0' + (c % 10); c /= 10; }
+    while (j > 0 && i < 31) msg[i++] = num[--j];
+    msg[i] = '\0';
+
+    for (int k = 0; k < HMAC_TAG_SIZE; k++) pkt.hmac[k] = 0;
+
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    vga_set_color(0x0E);
+    vga_puts("> DATA: ");
+    vga_puts((char*)pkt.payload);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[TX] DATA: ");
+    serial_puts((char*)pkt.payload);
+    serial_puts("\n");
+}
+
+/* Trigger ALARM propagation */
+static void cmd_send_alarm(void) {
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_ALARM;
+    pkt.ttl = 5;  /* Will propagate up to 5 hops */
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Alarm payload */
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = ticks;  /* Timestamp */
+    p += 4;
+    *(uint32_t*)p = g_state.node_id;  /* Source */
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    vga_set_color(0x0C);
+    vga_puts("!!! ALARM TRIGGERED !!!\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[ALARM] Triggered from ");
+    serial_put_hex(g_state.node_id);
+    serial_puts("\n");
+}
+
+/* Send Queen command (only if queen) */
+static void cmd_queen_command(void) {
+    if (g_state.role != ROLE_QUEEN) {
+        vga_set_color(0x0C);
+        vga_puts("! Only QUEEN can send commands\n");
+        vga_set_color(0x0A);
+        return;
+    }
+
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_QUEEN_CMD;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;  /* Broadcast */
+    pkt.distance = 0;
+    pkt.hop_count = 0;
+
+    PKT_SET_ROLE(&pkt, ROLE_QUEEN);
+
+    /* Command message */
+    const char* cmd = "QUEEN ORDERS: Report!";
+    int i = 0;
+    while (*cmd && i < 31) pkt.payload[i++] = *cmd++;
+    pkt.payload[i] = '\0';
+
+    compute_hmac(&pkt);  /* Queen commands must be authenticated */
+
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    vga_set_color(0x0D);
+    vga_puts(">> QUEEN COMMAND SENT: ");
+    vga_puts((char*)pkt.payload);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[QUEEN] Command sent\n");
+}
+
+/* Force election start */
+static void cmd_force_election(void) {
+    vga_set_color(0x0E);
+    vga_puts("~ Forcing queen election...\n");
+    vga_set_color(0x0A);
+
+    /* Reset queen tracking to force election */
+    g_state.known_queen_id = 0;
+    g_state.last_queen_seen = 0;
+    g_state.distance_to_queen = GRADIENT_INFINITY;
+
+    election_start();
+
+    serial_puts("[ELECTION] Forced start\n");
+}
+
+/* Show help */
+static void cmd_show_help(void) {
+    vga_set_color(0x0B);
+    vga_puts("\n=== NanOS Interactive Commands ===\n");
+    vga_set_color(0x0A);
+    vga_puts("  s - Show swarm status\n");
+    vga_puts("  d - Send DATA message\n");
+    vga_puts("  a - Trigger ALARM\n");
+    vga_puts("  q - Send QUEEN command (queens only)\n");
+    vga_puts("  e - Force queen election\n");
+    vga_puts("  h - Show this help\n");
+    vga_puts("  r - Force apoptosis (rebirth)\n");
+    vga_set_color(0x0E);
+    vga_puts("--- Workloads ---\n");
+    vga_set_color(0x0A);
+    vga_puts("  k - KV store demo (set/replicate)\n");
+    vga_puts("  t - Task distribution (queens only)\n");
+    vga_puts("  w - Show workload stats\n");
+    vga_set_color(0x0E);
+    vga_puts("--- Global Compute ---\n");
+    vga_set_color(0x0A);
+    vga_puts("  j - Start compute job (queens only)\n");
+    vga_puts("      Cycles: prime search, pi, sum\n");
+    vga_set_color(0x0B);
+    vga_puts("==================================\n\n");
+    vga_set_color(0x0A);
+}
+
+/* ==========================================================================
+ * Workload: Key-Value Store
+ * ========================================================================== */
+static int kv_find(const uint8_t* key) {
+    for (int i = 0; i < KV_STORE_SIZE; i++) {
+        if (g_state.kv_store[i].valid) {
+            int match = 1;
+            for (int j = 0; j < KV_KEY_SIZE && key[j]; j++) {
+                if (g_state.kv_store[i].key[j] != key[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match) return i;
+        }
+    }
+    return -1;
+}
+
+static void kv_set(const uint8_t* key, const uint8_t* value, int replicate) {
+    int idx = kv_find(key);
+    if (idx < 0) {
+        /* Find empty slot */
+        for (int i = 0; i < KV_STORE_SIZE; i++) {
+            if (!g_state.kv_store[i].valid) {
+                idx = i;
+                break;
+            }
+        }
+    }
+    if (idx < 0) idx = 0;  /* Overwrite first if full */
+
+    /* Copy key and value */
+    for (int i = 0; i < KV_KEY_SIZE; i++)
+        g_state.kv_store[idx].key[i] = (i < KV_KEY_SIZE && key[i]) ? key[i] : 0;
+    for (int i = 0; i < KV_VALUE_SIZE; i++)
+        g_state.kv_store[idx].value[i] = (i < KV_VALUE_SIZE && value[i]) ? value[i] : 0;
+    g_state.kv_store[idx].valid = 1;
+
+    serial_puts("[KV] SET ");
+    serial_puts((const char*)key);
+    serial_puts("=");
+    serial_puts((const char*)value);
+    serial_puts("\n");
+
+    /* Replicate to neighbors */
+    if (replicate && g_state.neighbor_count > 0) {
+        struct nanos_pheromone pkt;
+        pkt.magic = NANOS_MAGIC;
+        pkt.node_id = g_state.node_id;
+        pkt.type = PHEROMONE_KV_SET;
+        pkt.ttl = KV_REPLICATION;
+        pkt.flags = 0;
+        pkt.version = NANOS_VERSION;
+        pkt.seq = g_state.seq_counter++;
+        pkt.dest_id = 0;
+        pkt.distance = g_state.distance_to_queen;
+        pkt.hop_count = 0;
+        PKT_SET_ROLE(&pkt, g_state.role);
+
+        /* Payload: key (8) + value (16) */
+        for (int i = 0; i < KV_KEY_SIZE; i++) pkt.payload[i] = key[i] ? key[i] : 0;
+        for (int i = 0; i < KV_VALUE_SIZE; i++) pkt.payload[KV_KEY_SIZE + i] = value[i] ? value[i] : 0;
+
+        for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+        e1000_send(&pkt, sizeof(pkt));
+        g_state.packets_tx++;
+    }
+}
+
+static void process_kv_set(struct nanos_pheromone* pkt) {
+    uint8_t key[KV_KEY_SIZE + 1];
+    uint8_t value[KV_VALUE_SIZE + 1];
+    for (int i = 0; i < KV_KEY_SIZE; i++) key[i] = pkt->payload[i];
+    key[KV_KEY_SIZE] = 0;
+    for (int i = 0; i < KV_VALUE_SIZE; i++) value[i] = pkt->payload[KV_KEY_SIZE + i];
+    value[KV_VALUE_SIZE] = 0;
+
+    kv_set(key, value, 0);  /* Don't re-replicate */
+
+    /* Forward if TTL > 0 */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* ==========================================================================
+ * Workload: Task Distribution
+ * ========================================================================== */
+static uint32_t is_prime(uint32_t n) {
+    if (n < 2) return 0;
+    if (n == 2) return 1;
+    if (n % 2 == 0) return 0;
+    for (uint32_t i = 3; i * i <= n; i += 2) {
+        if (n % i == 0) return 0;
+    }
+    return 1;
+}
+
+static uint32_t factorial(uint32_t n) {
+    uint32_t result = 1;
+    for (uint32_t i = 2; i <= n && i < 13; i++) {  /* Limit to avoid overflow */
+        result *= i;
+    }
+    return result;
+}
+
+static uint32_t fibonacci(uint32_t n) {
+    if (n <= 1) return n;
+    uint32_t a = 0, b = 1;
+    for (uint32_t i = 2; i <= n && i < 47; i++) {  /* Limit to avoid overflow */
+        uint32_t c = a + b;
+        a = b;
+        b = c;
+    }
+    return b;
+}
+
+static void task_execute(uint8_t task_type, uint32_t input, uint32_t task_id, uint32_t requester) {
+    uint32_t result = 0;
+
+    switch (task_type) {
+        case TASK_PRIME_CHECK:
+            result = is_prime(input);
+            vga_puts("[TASK] Prime(");
+            vga_put_dec(input);
+            vga_puts(") = ");
+            vga_puts(result ? "YES" : "NO");
+            vga_puts("\n");
+            break;
+        case TASK_FACTORIAL:
+            result = factorial(input);
+            vga_puts("[TASK] Factorial(");
+            vga_put_dec(input);
+            vga_puts(") = ");
+            vga_put_dec(result);
+            vga_puts("\n");
+            break;
+        case TASK_FIBONACCI:
+            result = fibonacci(input);
+            vga_puts("[TASK] Fibonacci(");
+            vga_put_dec(input);
+            vga_puts(") = ");
+            vga_put_dec(result);
+            vga_puts("\n");
+            break;
+    }
+
+    /* Send result back */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_RESULT;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = FLAG_ROUTED;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = requester;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = task_id; p += 4;
+    *(uint32_t*)p = result; p += 4;
+    *p = task_type;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    serial_puts("[TASK] Completed task ");
+    serial_put_dec(task_id);
+    serial_puts(" result=");
+    serial_put_dec(result);
+    serial_puts("\n");
+}
+
+static void task_distribute(uint8_t task_type, uint32_t input) {
+    if (g_state.role != ROLE_QUEEN) {
+        vga_puts("! Only QUEEN can distribute tasks\n");
+        return;
+    }
+
+    /* Find a worker neighbor */
+    uint32_t target = 0;
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+        if (g_state.neighbors[i].node_id != 0 &&
+            g_state.neighbors[i].role == ROLE_WORKER) {
+            target = g_state.neighbors[i].node_id;
+            break;
+        }
+    }
+    if (target == 0 && g_state.neighbor_count > 0) {
+        /* No worker found, pick any neighbor */
+        for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+            if (g_state.neighbors[i].node_id != 0) {
+                target = g_state.neighbors[i].node_id;
+                break;
+            }
+        }
+    }
+
+    uint32_t task_id = g_state.tasks_sent++;
+
+    /* Record pending task */
+    int slot = task_id % MAX_PENDING_TASKS;
+    g_state.pending_tasks[slot].task_id = task_id;
+    g_state.pending_tasks[slot].task_type = task_type;
+    g_state.pending_tasks[slot].input = input;
+    g_state.pending_tasks[slot].assigned_to = target;
+    g_state.pending_tasks[slot].sent_at = ticks;
+    g_state.pending_tasks[slot].completed = 0;
+
+    /* Send task */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_TASK;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = target ? FLAG_ROUTED : 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = target;
+    pkt.distance = 0;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, ROLE_QUEEN);
+
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = task_id; p += 4;
+    *(uint32_t*)p = input; p += 4;
+    *p = task_type;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    vga_set_color(0x0D);
+    vga_puts(">> TASK #");
+    vga_put_dec(task_id);
+    vga_puts(" sent to ");
+    vga_put_hex(target);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[QUEEN] Task ");
+    serial_put_dec(task_id);
+    serial_puts(" type=");
+    serial_put_dec(task_type);
+    serial_puts(" input=");
+    serial_put_dec(input);
+    serial_puts(" -> ");
+    serial_put_hex(target);
+    serial_puts("\n");
+}
+
+static void process_task(struct nanos_pheromone* pkt) {
+    uint32_t task_id = *(uint32_t*)(pkt->payload);
+    uint32_t input = *(uint32_t*)(pkt->payload + 4);
+    uint8_t task_type = pkt->payload[8];
+
+    task_execute(task_type, input, task_id, pkt->node_id);
+}
+
+static void process_result(struct nanos_pheromone* pkt) {
+    uint32_t task_id = *(uint32_t*)(pkt->payload);
+    uint32_t result = *(uint32_t*)(pkt->payload + 4);
+
+    /* Find pending task */
+    int slot = task_id % MAX_PENDING_TASKS;
+    if (g_state.pending_tasks[slot].task_id == task_id) {
+        g_state.pending_tasks[slot].completed = 1;
+        g_state.pending_tasks[slot].result = result;
+        g_state.tasks_completed++;
+    }
+
+    vga_set_color(0x0B);
+    vga_puts("<< RESULT #");
+    vga_put_dec(task_id);
+    vga_puts(" = ");
+    vga_put_dec(result);
+    vga_puts(" from ");
+    vga_put_hex(pkt->node_id);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[QUEEN] Result task=");
+    serial_put_dec(task_id);
+    serial_puts(" result=");
+    serial_put_dec(result);
+    serial_puts("\n");
+}
+
+/* ==========================================================================
+ * Workload: Sensor Network
+ * ========================================================================== */
+static void sensor_generate(void) {
+    /* Generate simulated sensor readings */
+    g_state.sensors[0].value = 200 + (random() % 100);  /* Temp: 20.0-30.0 C (x10) */
+    g_state.sensors[1].value = 400 + (random() % 400);  /* Humidity: 40-80% (x10) */
+    g_state.sensors[2].value = 10100 + (random() % 200) - 100;  /* Pressure: 1000-1020 hPa (x10) */
+
+    /* Update local aggregates */
+    for (int i = 0; i < SENSOR_TYPES; i++) {
+        g_state.sensors[i].sum += g_state.sensors[i].value;
+        g_state.sensors[i].count++;
+        if (g_state.sensors[i].value < g_state.sensors[i].min || g_state.sensors[i].min == 0)
+            g_state.sensors[i].min = g_state.sensors[i].value;
+        if (g_state.sensors[i].value > g_state.sensors[i].max)
+            g_state.sensors[i].max = g_state.sensors[i].value;
+    }
+
+    /* Send sensor data */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_SENSOR;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    uint8_t* p = pkt.payload;
+    for (int i = 0; i < SENSOR_TYPES; i++) {
+        *(int32_t*)p = g_state.sensors[i].value; p += 4;
+    }
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    serial_puts("[SENSOR] T=");
+    serial_put_dec(g_state.sensors[0].value / 10);
+    serial_puts(".");
+    serial_put_dec(g_state.sensors[0].value % 10);
+    serial_puts("C H=");
+    serial_put_dec(g_state.sensors[1].value / 10);
+    serial_puts("% P=");
+    serial_put_dec(g_state.sensors[2].value / 10);
+    serial_puts("hPa\n");
+
+    g_state.last_sensor_reading = ticks;
+}
+
+static void process_sensor(struct nanos_pheromone* pkt) {
+    /* Aggregate received sensor data */
+    int32_t* values = (int32_t*)pkt->payload;
+    for (int i = 0; i < SENSOR_TYPES; i++) {
+        g_state.sensors[i].sum += values[i];
+        g_state.sensors[i].count++;
+        if (values[i] < g_state.sensors[i].min || g_state.sensors[i].min == 0)
+            g_state.sensors[i].min = values[i];
+        if (values[i] > g_state.sensors[i].max)
+            g_state.sensors[i].max = values[i];
+    }
+}
+
+static void sensor_aggregate(void) {
+    if (g_state.role != ROLE_QUEEN) return;
+    if (g_state.sensors[0].count == 0) return;
+
+    vga_set_color(0x0B);
+    vga_puts("[AGGREGATE] n=");
+    vga_put_dec(g_state.sensors[0].count);
+    vga_puts(" Temp: avg=");
+    vga_put_dec((g_state.sensors[0].sum / g_state.sensors[0].count) / 10);
+    vga_puts(".");
+    vga_put_dec((g_state.sensors[0].sum / g_state.sensors[0].count) % 10);
+    vga_puts(" min=");
+    vga_put_dec(g_state.sensors[0].min / 10);
+    vga_puts(" max=");
+    vga_put_dec(g_state.sensors[0].max / 10);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[AGGREGATE] count=");
+    serial_put_dec(g_state.sensors[0].count);
+    serial_puts(" temp_avg=");
+    serial_put_dec(g_state.sensors[0].sum / g_state.sensors[0].count);
+    serial_puts(" hum_avg=");
+    serial_put_dec(g_state.sensors[1].sum / g_state.sensors[1].count);
+    serial_puts(" pres_avg=");
+    serial_put_dec(g_state.sensors[2].sum / g_state.sensors[2].count);
+    serial_puts("\n");
+
+    /* Reset for next period */
+    for (int i = 0; i < SENSOR_TYPES; i++) {
+        g_state.sensors[i].sum = 0;
+        g_state.sensors[i].count = 0;
+        g_state.sensors[i].min = 0;
+        g_state.sensors[i].max = 0;
+    }
+
+    g_state.last_aggregate = ticks;
+}
+
+/* ==========================================================================
+ * Global Compute - MapReduce Style Distributed Computing
+ * ========================================================================== */
+
+/* Count primes in a range (for prime search job) */
+static uint32_t count_primes_in_range(uint32_t start, uint32_t end) {
+    uint32_t count = 0;
+    for (uint32_t n = start; n <= end; n++) {
+        if (is_prime(n)) count++;
+    }
+    return count;
+}
+
+/* Monte Carlo Pi estimation - random points in unit square */
+static uint32_t monte_carlo_pi_samples(uint32_t samples) {
+    uint32_t inside = 0;
+    for (uint32_t i = 0; i < samples; i++) {
+        /* Generate random point in [0,1000) x [0,1000) */
+        uint32_t x = random() % 1000;
+        uint32_t y = random() % 1000;
+        /* Check if inside quarter circle: x^2 + y^2 < 1000^2 */
+        if (x * x + y * y < 1000000) {
+            inside++;
+        }
+    }
+    return inside;  /* Pi ~= 4 * inside / samples */
+}
+
+/* Sum numbers in a range (for parallel sum job) */
+static uint64_t sum_range(uint32_t start, uint32_t end) {
+    uint64_t sum = 0;
+    for (uint32_t n = start; n <= end; n++) {
+        sum += n;
+    }
+    return sum;
+}
+
+/* Process a job chunk */
+static void job_process_chunk(void) {
+    if (!g_state.current_chunk.processing) return;
+
+    uint32_t job_id = g_state.current_chunk.job_id;
+    uint8_t job_type = g_state.current_chunk.job_type;
+    uint32_t start = g_state.current_chunk.range_start;
+    uint32_t end = g_state.current_chunk.range_end;
+    uint64_t result = 0;
+
+    vga_set_color(0x0E);
+    vga_puts("[JOB] Processing chunk ");
+    vga_put_dec(g_state.current_chunk.chunk_id);
+    vga_puts(" (");
+    vga_put_dec(start);
+    vga_puts("-");
+    vga_put_dec(end);
+    vga_puts(")\n");
+    vga_set_color(0x0A);
+
+    switch (job_type) {
+        case JOB_PRIME_SEARCH:
+            result = count_primes_in_range(start, end);
+            break;
+        case JOB_MONTE_CARLO_PI:
+            result = monte_carlo_pi_samples(end - start);
+            break;
+        case JOB_REDUCE_SUM:
+            result = sum_range(start, end);
+            break;
+        default:
+            result = 0;
+    }
+
+    /* Send result back */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_JOB_DONE;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;  /* Broadcast to queen */
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Payload: job_id(4) + chunk_id(4) + result_lo(4) + result_hi(4) */
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = job_id; p += 4;
+    *(uint32_t*)p = g_state.current_chunk.chunk_id; p += 4;
+    *(uint32_t*)p = (uint32_t)(result & 0xFFFFFFFF); p += 4;
+    *(uint32_t*)p = (uint32_t)(result >> 32); p += 4;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    vga_set_color(0x0B);
+    vga_puts("[JOB] Chunk ");
+    vga_put_dec(g_state.current_chunk.chunk_id);
+    vga_puts(" done: result=");
+    vga_put_dec((uint32_t)result);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[JOB] Chunk ");
+    serial_put_dec(g_state.current_chunk.chunk_id);
+    serial_puts(" done: ");
+    serial_put_dec((uint32_t)result);
+    serial_puts("\n");
+
+    g_state.current_chunk.processing = 0;
+    g_state.chunks_processed++;
+}
+
+/* Handle JOB_START pheromone */
+static void process_job_start(struct nanos_pheromone* pkt) {
+    uint32_t job_id = *(uint32_t*)(pkt->payload);
+    uint8_t job_type = pkt->payload[4];
+    uint32_t param1 = *(uint32_t*)(pkt->payload + 5);
+    uint32_t param2 = *(uint32_t*)(pkt->payload + 9);
+    uint32_t num_chunks = *(uint32_t*)(pkt->payload + 13);
+
+    /* Check if we're already processing this job (deduplication) */
+    int slot = job_id % MAX_ACTIVE_JOBS;
+    if (g_state.active_jobs[slot].job_id == job_id && g_state.active_jobs[slot].active) {
+        /* Already processing - just relay if needed */
+        if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+            pkt->ttl--;
+            e1000_send(pkt, sizeof(*pkt));
+        }
+        return;
+    }
+
+    /* Also check if we're currently processing a chunk from this job */
+    if (g_state.current_chunk.job_id == job_id && g_state.current_chunk.processing) {
+        if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+            pkt->ttl--;
+            e1000_send(pkt, sizeof(*pkt));
+        }
+        return;
+    }
+
+    /* New job - display it */
+    vga_set_color(0x0D);
+    vga_puts(">> JOB #");
+    vga_put_dec(job_id);
+    vga_puts(" type=");
+    vga_put_dec(job_type);
+    vga_puts(" range=");
+    vga_put_dec(param1);
+    vga_puts("-");
+    vga_put_dec(param2);
+    vga_puts(" chunks=");
+    vga_put_dec(num_chunks);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[JOB] Received job ");
+    serial_put_dec(job_id);
+    serial_puts(" type=");
+    serial_put_dec(job_type);
+    serial_puts("\n");
+
+    /* Calculate which chunk this node should process based on node_id */
+    uint32_t my_chunk = g_state.node_id % num_chunks;
+    uint32_t range_size = (param2 - param1) / num_chunks;
+    uint32_t chunk_start = param1 + (my_chunk * range_size);
+    uint32_t chunk_end = (my_chunk == num_chunks - 1) ? param2 : chunk_start + range_size - 1;
+
+    /* Record the job */
+    g_state.active_jobs[slot].job_id = job_id;
+    g_state.active_jobs[slot].job_type = job_type;
+    g_state.active_jobs[slot].active = 1;
+    g_state.active_jobs[slot].param1 = param1;
+    g_state.active_jobs[slot].param2 = param2;
+    g_state.active_jobs[slot].chunks_total = num_chunks;
+    g_state.active_jobs[slot].chunks_done = 0;
+    g_state.active_jobs[slot].result = 0;
+    g_state.active_jobs[slot].started_at = ticks;
+    g_state.active_jobs[slot].coordinator_id = pkt->node_id;  /* Sender aggregates results */
+
+    /* Set current chunk to process */
+    g_state.current_chunk.job_id = job_id;
+    g_state.current_chunk.job_type = job_type;
+    g_state.current_chunk.chunk_id = my_chunk;
+    g_state.current_chunk.range_start = chunk_start;
+    g_state.current_chunk.range_end = chunk_end;
+    g_state.current_chunk.processing = 1;
+
+    /* Relay the job announcement (gossip) */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Handle JOB_DONE pheromone (chunk result from worker) */
+static void process_job_done(struct nanos_pheromone* pkt) {
+    uint32_t job_id = *(uint32_t*)(pkt->payload);
+    uint32_t chunk_id = *(uint32_t*)(pkt->payload + 4);
+    uint32_t result_lo = *(uint32_t*)(pkt->payload + 8);
+    uint32_t result_hi = *(uint32_t*)(pkt->payload + 12);
+    uint64_t result = ((uint64_t)result_hi << 32) | result_lo;
+
+    int slot = job_id % MAX_ACTIVE_JOBS;
+
+    /* Check if we should aggregate results */
+    int should_aggregate = 0;
+
+    if (g_state.role == ROLE_QUEEN) {
+        /* Queens always aggregate */
+        should_aggregate = 1;
+    } else if (g_state.active_jobs[slot].coordinator_id == g_state.node_id) {
+        /* We are the designated coordinator */
+        should_aggregate = 1;
+    } else if (g_state.current_chunk.chunk_id == 0 &&
+               g_state.current_chunk.job_id == job_id) {
+        /* Fallback: node processing chunk 0 aggregates (for external coordinators like dashboard) */
+        should_aggregate = 1;
+    }
+
+    if (should_aggregate) {
+        if (g_state.active_jobs[slot].job_id == job_id && g_state.active_jobs[slot].active) {
+            g_state.active_jobs[slot].result += result;
+            g_state.active_jobs[slot].chunks_done++;
+
+            vga_set_color(0x0B);
+            vga_puts("<< CHUNK ");
+            vga_put_dec(chunk_id);
+            vga_puts(" result=");
+            vga_put_dec((uint32_t)result);
+            vga_puts(" (");
+            vga_put_dec(g_state.active_jobs[slot].chunks_done);
+            vga_puts("/");
+            vga_put_dec(g_state.active_jobs[slot].chunks_total);
+            vga_puts(")\n");
+            vga_set_color(0x0A);
+
+            /* Check if job is complete */
+            if (g_state.active_jobs[slot].chunks_done >= g_state.active_jobs[slot].chunks_total) {
+                vga_set_color(0x0D);
+                vga_puts(">> JOB #");
+                vga_put_dec(job_id);
+                vga_puts(" COMPLETE! Total result: ");
+                vga_put_dec((uint32_t)g_state.active_jobs[slot].result);
+                vga_puts("\n");
+                vga_set_color(0x0A);
+
+                serial_puts("[JOB] Job ");
+                serial_put_dec(job_id);
+                serial_puts(" complete: result=");
+                serial_put_dec((uint32_t)g_state.active_jobs[slot].result);
+                serial_puts("\n");
+
+                g_state.active_jobs[slot].active = 0;
+                g_state.jobs_completed++;
+
+                /* Broadcast final result */
+                struct nanos_pheromone result_pkt;
+                result_pkt.magic = NANOS_MAGIC;
+                result_pkt.node_id = g_state.node_id;
+                result_pkt.type = PHEROMONE_JOB_RESULT;
+                result_pkt.ttl = GRADIENT_MAX_HOPS;
+                result_pkt.flags = 0;
+                result_pkt.version = NANOS_VERSION;
+                result_pkt.seq = g_state.seq_counter++;
+                result_pkt.dest_id = 0;
+                result_pkt.distance = 0;
+                result_pkt.hop_count = 0;
+                PKT_SET_ROLE(&result_pkt, ROLE_QUEEN);
+
+                uint8_t* p = result_pkt.payload;
+                *(uint32_t*)p = job_id; p += 4;
+                *(uint32_t*)p = (uint32_t)(g_state.active_jobs[slot].result & 0xFFFFFFFF); p += 4;
+                *(uint32_t*)p = (uint32_t)(g_state.active_jobs[slot].result >> 32);
+
+                for (int i = 0; i < HMAC_TAG_SIZE; i++) result_pkt.hmac[i] = 0;
+                e1000_send(&result_pkt, sizeof(result_pkt));
+                g_state.packets_tx++;
+            }
+        }
+    }
+
+    /* Relay result (gossip toward queen) */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Handle JOB_RESULT pheromone (final result broadcast) */
+static void process_job_result(struct nanos_pheromone* pkt) {
+    /* Deduplicate using gossip cache */
+    if (!gossip_should_relay(pkt)) {
+        return;  /* Already seen this result */
+    }
+
+    uint32_t job_id = *(uint32_t*)(pkt->payload);
+    uint32_t result_lo = *(uint32_t*)(pkt->payload + 4);
+    uint32_t result_hi = *(uint32_t*)(pkt->payload + 8);
+    uint64_t result = ((uint64_t)result_hi << 32) | result_lo;
+
+    vga_set_color(0x0D);
+    vga_puts(">> FINAL RESULT Job #");
+    vga_put_dec(job_id);
+    vga_puts(": ");
+    vga_put_dec((uint32_t)result);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    /* Clear our active job state for this job */
+    int slot = job_id % MAX_ACTIVE_JOBS;
+    if (g_state.active_jobs[slot].job_id == job_id) {
+        g_state.active_jobs[slot].active = 0;
+    }
+
+    /* Relay the result */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Command to start a global compute job (queen only) */
+static void cmd_start_job(void) {
+    if (g_state.role != ROLE_QUEEN) {
+        vga_puts("! Only QUEEN can start global jobs\n");
+        return;
+    }
+
+    static uint32_t job_counter = 0;
+    uint32_t job_id = job_counter++;
+
+    /* Create a prime search job */
+    uint32_t range_start = 1 + (random() % 1000);
+    uint32_t range_end = range_start + 1000 + (random() % 5000);
+    uint32_t num_chunks = g_state.neighbor_count > 0 ? g_state.neighbor_count + 1 : 1;
+    if (num_chunks > MAX_JOB_CHUNKS) num_chunks = MAX_JOB_CHUNKS;
+
+    vga_set_color(0x0D);
+    vga_puts(">> Starting PRIME SEARCH job #");
+    vga_put_dec(job_id);
+    vga_puts("\n   Range: ");
+    vga_put_dec(range_start);
+    vga_puts(" - ");
+    vga_put_dec(range_end);
+    vga_puts("\n   Chunks: ");
+    vga_put_dec(num_chunks);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    /* Build and send JOB_START */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_JOB_START;
+    pkt.ttl = GRADIENT_MAX_HOPS;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;  /* Broadcast */
+    pkt.distance = 0;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, ROLE_QUEEN);
+
+    /* Payload: job_id(4) + job_type(1) + param1(4) + param2(4) + num_chunks(4) */
+    uint8_t* p = pkt.payload;
+    *(uint32_t*)p = job_id; p += 4;
+    *p++ = JOB_PRIME_SEARCH;
+    *(uint32_t*)p = range_start; p += 4;
+    *(uint32_t*)p = range_end; p += 4;
+    *(uint32_t*)p = num_chunks;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+
+    /* Record the job locally */
+    int slot = job_id % MAX_ACTIVE_JOBS;
+    g_state.active_jobs[slot].job_id = job_id;
+    g_state.active_jobs[slot].job_type = JOB_PRIME_SEARCH;
+    g_state.active_jobs[slot].active = 1;
+    g_state.active_jobs[slot].param1 = range_start;
+    g_state.active_jobs[slot].param2 = range_end;
+    g_state.active_jobs[slot].chunks_total = num_chunks;
+    g_state.active_jobs[slot].chunks_done = 0;
+    g_state.active_jobs[slot].result = 0;
+    g_state.active_jobs[slot].started_at = ticks;
+    g_state.active_jobs[slot].coordinator_id = g_state.node_id;  /* We are coordinator */
+
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+
+    /* Also process our own chunk */
+    process_job_start(&pkt);
+
+    serial_puts("[JOB] Started global job ");
+    serial_put_dec(job_id);
+    serial_puts("\n");
+}
+
+/* ==========================================================================
+ * Workload Commands
+ * ========================================================================== */
+static void cmd_kv_demo(void) {
+    static int demo = 0;
+    uint8_t key[16], value[16];
+
+    /* Generate demo key/value */
+    key[0] = 'k'; key[1] = 'e'; key[2] = 'y';
+    key[3] = '0' + (demo % 10); key[4] = 0;
+
+    value[0] = 'v'; value[1] = 'a'; value[2] = 'l';
+    value[3] = '0' + (demo % 10); value[4] = 0;
+
+    demo++;
+
+    kv_set(key, value, 1);
+    vga_puts("[KV] Stored and replicated: ");
+    vga_puts((char*)key);
+    vga_puts("=");
+    vga_puts((char*)value);
+    vga_puts("\n");
+}
+
+static void cmd_task_demo(void) {
+    if (g_state.role != ROLE_QUEEN) {
+        vga_puts("! Only QUEEN can distribute tasks\n");
+        return;
+    }
+
+    /* Send a random task */
+    uint8_t task_type = (random() % 3) + 1;
+    uint32_t input = (random() % 100) + 1;
+
+    task_distribute(task_type, input);
+}
+
+static void cmd_show_workloads(void) {
+    vga_set_color(0x0B);
+    vga_puts("\n========= WORKLOAD STATUS =========\n");
+    vga_set_color(0x0A);
+
+    /* KV Store */
+    vga_puts("KV Store: ");
+    int kv_used = 0;
+    for (int i = 0; i < KV_STORE_SIZE; i++) {
+        if (g_state.kv_store[i].valid) kv_used++;
+    }
+    vga_put_dec(kv_used);
+    vga_puts("/");
+    vga_put_dec(KV_STORE_SIZE);
+    vga_puts(" slots used\n");
+    for (int i = 0; i < KV_STORE_SIZE; i++) {
+        if (g_state.kv_store[i].valid) {
+            vga_puts("  ");
+            vga_puts((char*)g_state.kv_store[i].key);
+            vga_puts(" = ");
+            vga_puts((char*)g_state.kv_store[i].value);
+            vga_puts("\n");
+        }
+    }
+
+    /* Tasks */
+    vga_puts("Tasks: sent=");
+    vga_put_dec(g_state.tasks_sent);
+    vga_puts(" completed=");
+    vga_put_dec(g_state.tasks_completed);
+    vga_puts("\n");
+
+    /* Sensors */
+    vga_puts("Sensors: readings=");
+    vga_put_dec(g_state.sensors[0].count);
+    if (g_state.sensors[0].count > 0) {
+        vga_puts(" T=");
+        vga_put_dec(g_state.sensors[0].value / 10);
+        vga_puts("C H=");
+        vga_put_dec(g_state.sensors[1].value / 10);
+        vga_puts("% P=");
+        vga_put_dec(g_state.sensors[2].value / 10);
+        vga_puts("hPa");
+    }
+    vga_puts("\n");
+
+    /* Global Compute Jobs */
+    vga_set_color(0x0E);
+    vga_puts("--- Global Compute ---\n");
+    vga_set_color(0x0A);
+    vga_puts("Jobs completed: ");
+    vga_put_dec(g_state.jobs_completed);
+    vga_puts(" | Chunks processed: ");
+    vga_put_dec(g_state.chunks_processed);
+    vga_puts("\n");
+
+    /* Show active jobs */
+    for (int i = 0; i < MAX_ACTIVE_JOBS; i++) {
+        if (g_state.active_jobs[i].active) {
+            vga_puts("  Job ");
+            vga_put_hex(g_state.active_jobs[i].job_id);
+            vga_puts(": type=");
+            switch (g_state.active_jobs[i].job_type) {
+                case JOB_PRIME_SEARCH: vga_puts("PRIME"); break;
+                case JOB_MONTE_CARLO_PI: vga_puts("PI"); break;
+                case JOB_REDUCE_SUM: vga_puts("SUM"); break;
+                default: vga_puts("?"); break;
+            }
+            vga_puts(" progress=");
+            vga_put_dec(g_state.active_jobs[i].chunks_done);
+            vga_puts("/");
+            vga_put_dec(g_state.active_jobs[i].chunks_total);
+            vga_puts("\n");
+        }
+    }
+
+    /* Show current chunk if processing */
+    if (g_state.current_chunk.processing) {
+        vga_puts("  Processing chunk ");
+        vga_put_dec(g_state.current_chunk.chunk_id);
+        vga_puts(" [");
+        vga_put_dec(g_state.current_chunk.range_start);
+        vga_puts("-");
+        vga_put_dec(g_state.current_chunk.range_end);
+        vga_puts("]\n");
+    }
+
+    vga_set_color(0x0B);
+    vga_puts("===================================\n\n");
+    vga_set_color(0x0A);
+}
+
+/* Process keyboard command */
+static void process_command(char c) {
+    switch (c) {
+        case 's': cmd_show_status(); break;
+        case 'd': cmd_send_data(); break;
+        case 'a': cmd_send_alarm(); break;
+        case 'q': cmd_queen_command(); break;
+        case 'e': cmd_force_election(); break;
+        case 'h': cmd_show_help(); break;
+        case 'r':
+            vga_puts("~ Manual rebirth requested...\n");
+            cell_apoptosis();
+            break;
+        /* Workload commands */
+        case 'k': cmd_kv_demo(); break;      /* KV store demo */
+        case 't': cmd_task_demo(); break;    /* Task distribution demo */
+        case 'w': cmd_show_workloads(); break; /* Show workload status */
+        case 'j': cmd_start_job(); break;    /* Start global compute job */
+        default:
+            break;
+    }
+}
+
+/* ==========================================================================
  * Apoptosis - Programmed Cell Death and Rebirth
  * ========================================================================== */
 void cell_apoptosis(void) {
@@ -565,7 +1904,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 
         case PHEROMONE_DATA:
             vga_puts("< DATA: ");
-            pkt->payload[39] = '\0';
+            pkt->payload[31] = '\0';
             vga_puts((char*)pkt->payload);
             vga_puts("\n");
             break;
@@ -595,7 +1934,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             vga_set_color(0x0D);  /* Magenta - queen commands */
             vga_puts(">> QUEEN COMMAND: ");
-            pkt->payload[39] = '\0';
+            pkt->payload[31] = '\0';
             vga_puts((char*)pkt->payload);
             vga_puts("\n");
             vga_set_color(0x0A);
@@ -652,6 +1991,98 @@ void process_pheromone(struct nanos_pheromone* pkt) {
                     e1000_send(pkt, sizeof(*pkt));
                 }
             }
+            break;
+
+        /* ==========================================================================
+         * Workload Pheromones
+         * ========================================================================== */
+        case PHEROMONE_KV_SET:
+            process_kv_set(pkt);
+            break;
+
+        case PHEROMONE_KV_GET:
+            /* Handle GET request - send back value if we have it */
+            {
+                uint8_t* key = pkt->payload;
+                int idx = kv_find(key);
+                if (idx >= 0) {
+                    /* We have this key - send reply */
+                    struct nanos_pheromone reply;
+                    reply.magic = NANOS_MAGIC;
+                    reply.node_id = g_state.node_id;
+                    reply.type = PHEROMONE_KV_REPLY;
+                    reply.ttl = GRADIENT_MAX_HOPS;
+                    reply.flags = FLAG_ROUTED;
+                    reply.version = NANOS_VERSION;
+                    reply.seq = g_state.seq_counter++;
+                    reply.dest_id = pkt->node_id;  /* Reply to sender */
+                    reply.distance = g_state.distance_to_queen;
+                    reply.hop_count = 0;
+
+                    /* Copy key and value to payload */
+                    for (int i = 0; i < KV_KEY_SIZE; i++)
+                        reply.payload[i] = key[i];
+                    for (int i = 0; i < KV_VALUE_SIZE; i++)
+                        reply.payload[KV_KEY_SIZE + i] = g_state.kv_store[idx].value[i];
+
+                    for (int i = 0; i < HMAC_TAG_SIZE; i++) reply.hmac[i] = 0;
+                    e1000_send(&reply, sizeof(reply));
+                    g_state.packets_tx++;
+                }
+            }
+            break;
+
+        case PHEROMONE_KV_REPLY:
+            /* Got a KV reply */
+            vga_set_color(0x0E);
+            vga_puts("< KV REPLY: ");
+            pkt->payload[KV_KEY_SIZE - 1] = '\0';
+            vga_puts((char*)pkt->payload);
+            vga_puts(" = ");
+            pkt->payload[KV_KEY_SIZE + KV_VALUE_SIZE - 1] = '\0';
+            vga_puts((char*)(pkt->payload + KV_KEY_SIZE));
+            vga_puts("\n");
+            vga_set_color(0x0A);
+            break;
+
+        case PHEROMONE_TASK:
+            process_task(pkt);
+            break;
+
+        case PHEROMONE_RESULT:
+            process_result(pkt);
+            break;
+
+        case PHEROMONE_SENSOR:
+            process_sensor(pkt);
+            break;
+
+        case PHEROMONE_AGGREGATE:
+            /* Display aggregate stats from other nodes */
+            vga_set_color(0x0B);
+            vga_puts("< AGGREGATE from ");
+            vga_put_hex(pkt->node_id);
+            vga_puts(": T=");
+            vga_put_dec(*(int32_t*)(pkt->payload));
+            vga_puts(" H=");
+            vga_put_dec(*(int32_t*)(pkt->payload + 4));
+            vga_puts(" P=");
+            vga_put_dec(*(int32_t*)(pkt->payload + 8));
+            vga_puts("\n");
+            vga_set_color(0x0A);
+            break;
+
+        /* Global Compute - MapReduce job handling */
+        case PHEROMONE_JOB_START:
+            process_job_start(pkt);
+            break;
+
+        case PHEROMONE_JOB_DONE:
+            process_job_done(pkt);
+            break;
+
+        case PHEROMONE_JOB_RESULT:
+            process_job_result(pkt);
             break;
 
         default:
@@ -712,12 +2143,19 @@ void emit_heartbeat(void) {
 void nanos_loop(void) {
     static uint8_t rx_buffer[2048];
     static uint32_t last_maintenance = 0;
+    static uint32_t last_metrics = 0;
 
     for (;;) {
         /* Check for apoptosis conditions */
         if (heap_usage_percent() >= HEAP_CRITICAL_PCT ||
             ticks - g_state.boot_time > MAX_CELL_LIFETIME) {
             cell_apoptosis();
+        }
+
+        /* Process keyboard input */
+        char c = kb_getchar();
+        if (c != 0) {
+            process_command(c);
         }
 
         /* Drain TX queue (non-blocking) */
@@ -733,6 +2171,28 @@ void nanos_loop(void) {
             }
         }
 
+        /* Periodic metrics logging to serial (every 10 seconds) */
+        if (ticks - last_metrics >= 1000) {
+            serial_puts("[METRICS] t=");
+            serial_put_dec((ticks - g_state.boot_time) / 100);
+            serial_puts("s node=");
+            serial_put_hex(g_state.node_id);
+            serial_puts(" role=");
+            serial_puts(role_name(g_state.role));
+            serial_puts(" neighbors=");
+            serial_put_dec(g_state.neighbor_count);
+            serial_puts(" rx=");
+            serial_put_dec(g_state.packets_rx);
+            serial_puts(" tx=");
+            serial_put_dec(g_state.packets_tx);
+            serial_puts(" queen=");
+            serial_put_hex(g_state.known_queen_id);
+            serial_puts(" dist=");
+            serial_put_dec(g_state.distance_to_queen);
+            serial_puts("\n");
+            last_metrics = ticks;
+        }
+
         /* Periodic collective intelligence maintenance (every ~1 second) */
         if (ticks - last_maintenance >= 100) {
             neighbor_expire();      /* Remove stale neighbors */
@@ -745,6 +2205,20 @@ void nanos_loop(void) {
         if (ticks - g_state.last_heartbeat >= heartbeat_interval()) {
             emit_heartbeat();
         }
+
+        /* Sensor network - generate readings periodically */
+        if (ticks - g_state.last_sensor_reading >= SENSOR_INTERVAL) {
+            sensor_generate();
+        }
+
+        /* Queens aggregate sensor data periodically */
+        if (g_state.role == ROLE_QUEEN &&
+            ticks - g_state.last_aggregate >= AGGREGATE_INTERVAL) {
+            sensor_aggregate();
+        }
+
+        /* Process any pending compute job chunks */
+        job_process_chunk();
 
         /* Sleep until next interrupt */
         cpu_halt();
@@ -774,6 +2248,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
     /* Initialize hardware */
     vga_puts("[*] Loading GDT...\n");
     gdt_load();
+
+    vga_puts("[*] Initializing serial (COM1)...\n");
+    serial_init();
+    serial_puts("\n=== NanOS v0.3 Boot ===\n");
 
     vga_puts("[*] Initializing interrupts...\n");
     pic_init();
@@ -864,7 +2342,18 @@ void kernel_main(uint32_t magic, void* mb_info) {
     vga_put_dec(MAX_CELL_LIFETIME / 100);
     vga_puts("s\n\n");
 
+    vga_set_color(0x0E);
+    vga_puts("Commands: [s]tatus [d]ata [a]larm [q]ueen [e]lection [h]elp\n\n");
+    vga_set_color(0x0A);
+
     vga_puts("Listening for pheromones...\n\n");
+
+    /* Log boot complete to serial */
+    serial_puts("[BOOT] Node=");
+    serial_put_hex(g_state.node_id);
+    serial_puts(" Role=");
+    serial_puts(role_name(g_state.role));
+    serial_puts(" ready\n");
 
     nanos_loop();
 }

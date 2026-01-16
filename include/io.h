@@ -54,18 +54,4 @@ static inline void io_wait(void) {
     outb(0x80, 0);  /* Write to unused port - creates small delay */
 }
 
-/* ==========================================================================
- * Memory-Mapped I/O - For devices like e1000
- * ========================================================================== */
-
-/* Write to memory-mapped register */
-static inline void mmio_write32(uint32_t addr, uint32_t value) {
-    *((volatile uint32_t*)addr) = value;
-}
-
-/* Read from memory-mapped register */
-static inline uint32_t mmio_read32(uint32_t addr) {
-    return *((volatile uint32_t*)addr);
-}
-
 #endif /* IO_H */
