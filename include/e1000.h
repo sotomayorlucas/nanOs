@@ -130,4 +130,10 @@ int  e1000_send(void* data, uint16_t length);
 int  e1000_receive(void* buffer, uint16_t max_length);
 bool e1000_has_packet(void);
 
+/* Non-blocking TX queue management */
+void e1000_tx_drain(void);           /* Call from main loop to flush queue */
+uint8_t e1000_tx_queue_depth(void);  /* Current queue depth */
+uint32_t e1000_tx_dropped(void);     /* Packets dropped due to full queue */
+bool e1000_tx_queue_available(void); /* Is there space in queue? */
+
 #endif /* E1000_H */
