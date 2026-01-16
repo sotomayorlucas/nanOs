@@ -6,7 +6,7 @@
 #ifndef IO_H
 #define IO_H
 
-#include <stdint.h>
+#include "nanos.h"  /* For uint8_t, uint16_t, uint32_t */
 
 /* ==========================================================================
  * Port I/O - Inline assembly for speed
