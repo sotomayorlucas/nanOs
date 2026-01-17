@@ -115,6 +115,183 @@ typedef _Bool              bool;
 #define ALARM_MAX_ECHOES    5
 
 /* ==========================================================================
+ * Bloom Filter - O(1) Deduplication
+ * ========================================================================== */
+#define BLOOM_BITS          256     /* 256 bits = 32 bytes */
+#define BLOOM_BYTES         (BLOOM_BITS / 8)
+#define BLOOM_HASH_K        3       /* Number of hash functions */
+#define BLOOM_SLOTS         4       /* Rotating time windows */
+#define BLOOM_WINDOW_MS     500     /* 500ms per window = 2s total */
+
+/* ==========================================================================
+ * Tactical Intelligence System
+ * ========================================================================== */
+/* Detection types */
+#define DETECT_NONE         0x00
+#define DETECT_MOTION       0x01    /* PIR, accelerometer */
+#define DETECT_ACOUSTIC     0x02    /* Microphone, ultrasound */
+#define DETECT_THERMAL      0x03    /* IR, temperature anomaly */
+#define DETECT_RF           0x04    /* Radio emissions */
+#define DETECT_MAGNETIC     0x05    /* Magnetometer (vehicles) */
+#define DETECT_PRESSURE     0x06    /* Footsteps, vibrations */
+
+/* Alert levels */
+#define ALERT_NONE          0
+#define ALERT_ANOMALY       1       /* Single node detection */
+#define ALERT_CONTACT       2       /* 2+ nodes, low confidence */
+#define ALERT_PROBABLE      3       /* 3+ nodes, temporal correlation */
+#define ALERT_CONFIRMED     4       /* High confidence, multiple types */
+#define ALERT_CRITICAL      5       /* Confirmed persistent threat */
+
+/* Sectors (8 = 45 degrees each) */
+#define SECTOR_COUNT        8
+
+/* Tactical pheromones */
+#define PHEROMONE_DETECT    0x60    /* Detection report */
+#define PHEROMONE_CORRELATE 0x61    /* Correlated event */
+#define PHEROMONE_TRACK     0x62    /* Target tracking */
+#define PHEROMONE_CLEAR     0x63    /* Sector cleared */
+
+/* Correlation settings */
+#define CORRELATION_WINDOW_MS   3000    /* Temporal window */
+#define CORRELATION_MIN_NODES   2       /* Min nodes for correlation */
+#define MAX_ACTIVE_EVENTS       4       /* Simultaneous events */
+#define EVENT_TIMEOUT_MS        10000   /* Event expires */
+
+/* ==========================================================================
+ * Maze Exploration - Collaborative Pathfinding
+ * ========================================================================== */
+#define MAZE_SIZE           16      /* 16x16 grid (256 cells) */
+#define MAZE_CELLS          (MAZE_SIZE * MAZE_SIZE)
+
+/* Cell states */
+#define MAZE_WALL           0xFF    /* Impassable wall */
+#define MAZE_UNEXPLORED     0x00    /* Not yet explored */
+#define MAZE_EXPLORED       0x01    /* Explored by some node */
+#define MAZE_PATH           0x02    /* Part of solution path */
+#define MAZE_START          0x10    /* Start position */
+#define MAZE_GOAL           0x20    /* Goal position */
+
+/* Maze pheromones */
+#define PHEROMONE_MAZE_INIT     0x70    /* Maze definition from dashboard */
+#define PHEROMONE_MAZE_DISCOVER 0x71    /* Cell discovery report */
+#define PHEROMONE_MAZE_PATH     0x72    /* Path segment found */
+#define PHEROMONE_MAZE_SOLVED   0x73    /* Solution path announcement */
+#define PHEROMONE_MAZE_MOVE     0x74    /* Node movement update */
+
+/* Exploration settings */
+#define MAZE_MOVE_INTERVAL      10      /* Ticks between moves (100ms) */
+#define MAZE_SHARE_INTERVAL     50      /* Share discoveries every 500ms */
+#define MAZE_MAX_EXPLORERS      8       /* Max simultaneous explorers */
+
+/* Direction constants */
+#define DIR_NORTH   0
+#define DIR_EAST    1
+#define DIR_SOUTH   2
+#define DIR_WEST    3
+#define DIR_COUNT   4
+
+/* ==========================================================================
+ * Tactical Terrain Exploration System
+ * ========================================================================== */
+#define TERRAIN_SIZE        32      /* 32x32 grid (1024 cells) */
+#define TERRAIN_CELLS       (TERRAIN_SIZE * TERRAIN_SIZE)
+
+/* Terrain Types (3 bits, stored in base[2:0]) */
+#define TERRAIN_OPEN        0x00    /* Open ground, easy movement */
+#define TERRAIN_FOREST      0x01    /* Trees, concealment, slower */
+#define TERRAIN_URBAN       0x02    /* Buildings, high cover */
+#define TERRAIN_WATER       0x03    /* Impassable or very slow */
+#define TERRAIN_ROCKY       0x04    /* Difficult, elevation changes */
+#define TERRAIN_MARSH       0x05    /* Very slow, low cover */
+#define TERRAIN_ROAD        0x06    /* Fast movement, no cover */
+#define TERRAIN_IMPASSABLE  0x07    /* Walls, cliffs - cannot traverse */
+
+/* Elevation (3 bits, stored in base[5:3], 0-7 = 0m to 70m) */
+#define TERRAIN_ELEV_SHIFT  3
+#define TERRAIN_ELEV_MASK   0x38
+
+/* Cover Rating (2 bits, stored in base[7:6]) */
+#define COVER_NONE          0x00    /* No protection */
+#define COVER_LOW           0x01    /* 25% protection */
+#define COVER_MEDIUM        0x02    /* 50% protection */
+#define COVER_HIGH          0x03    /* 75% protection */
+#define TERRAIN_COVER_SHIFT 6
+#define TERRAIN_COVER_MASK  0xC0
+
+/* Threat Levels (3 bits, stored in meta[7:5]) */
+#define THREAT_NONE         0x00    /* Area clear */
+#define THREAT_UNKNOWN      0x01    /* Not yet assessed */
+#define THREAT_SUSPECTED    0x02    /* Possible enemy presence */
+#define THREAT_DETECTED     0x03    /* Single detection */
+#define THREAT_CONFIRMED    0x04    /* Multiple confirmations */
+#define THREAT_ACTIVE       0x05    /* Active engagement */
+#define THREAT_CRITICAL     0x06    /* Overwhelming force */
+#define TERRAIN_THREAT_SHIFT 5
+#define TERRAIN_THREAT_MASK 0xE0
+
+/* Strategic Value (2 bits, stored in meta[4:3]) */
+#define STRATEGIC_NONE      0x00    /* No special value */
+#define STRATEGIC_LOW       0x01    /* Minor objective */
+#define STRATEGIC_MEDIUM    0x02    /* Important objective */
+#define STRATEGIC_HIGH      0x03    /* Critical objective */
+#define TERRAIN_STRAT_SHIFT 3
+#define TERRAIN_STRAT_MASK  0x18
+
+/* Passability (2 bits, stored in meta[2:1]) */
+#define PASS_BLOCKED        0x00    /* Cannot traverse */
+#define PASS_DIFFICULT      0x01    /* 3x movement cost */
+#define PASS_SLOW           0x02    /* 2x movement cost */
+#define PASS_NORMAL         0x03    /* 1x movement cost */
+#define TERRAIN_PASS_SHIFT  1
+#define TERRAIN_PASS_MASK   0x06
+
+/* Explored flag (1 bit, stored in meta[0]) */
+#define TERRAIN_EXPLORED    0x01
+
+/* Terrain Pheromone Types (0x80-0x8F) */
+#define PHEROMONE_TERRAIN_INIT      0x80    /* Map initialization from dashboard */
+#define PHEROMONE_TERRAIN_REPORT    0x81    /* Cell discovery report */
+#define PHEROMONE_TERRAIN_THREAT    0x82    /* Threat report */
+#define PHEROMONE_TERRAIN_OBJECTIVE 0x83    /* Strategic point marking */
+#define PHEROMONE_TERRAIN_MOVE      0x84    /* Explorer position update */
+#define PHEROMONE_TERRAIN_STRATEGY  0x85    /* Formation/route commands */
+#define PHEROMONE_TERRAIN_COMPLETE  0x86    /* Area fully explored */
+#define PHEROMONE_TERRAIN_ROUTE     0x87    /* Optimal path segment */
+
+/* Sensor Ranges by Role */
+#define SENSOR_RANGE_SCOUT      6   /* EXPLORER role: 6 cell radius */
+#define SENSOR_RANGE_SENTINEL   4   /* SENTINEL role: 4 cell radius, high threat detect */
+#define SENSOR_RANGE_WORKER     3   /* WORKER role: 3 cell radius */
+#define SENSOR_RANGE_QUEEN      5   /* QUEEN role: 5 cell radius */
+
+/* Movement Modes */
+#define TERRAIN_MODE_EXPLORE    0   /* Free exploration */
+#define TERRAIN_MODE_PATROL     1   /* Defined route patrol */
+#define TERRAIN_MODE_RETREAT    2   /* Moving to safety */
+#define TERRAIN_MODE_REGROUP    3   /* Moving to rally point */
+#define TERRAIN_MODE_ADVANCE    4   /* Moving toward objective */
+
+/* Strategy Commands */
+#define STRATEGY_SPREAD         0x01    /* Expand coverage */
+#define STRATEGY_REGROUP        0x02    /* Rally to point */
+#define STRATEGY_PATROL         0x03    /* Define patrol route */
+#define STRATEGY_RETREAT        0x04    /* Evacuation */
+#define STRATEGY_ADVANCE        0x05    /* Move toward objective */
+#define STRATEGY_HOLD           0x06    /* Defensive position */
+
+/* Timing Intervals */
+#define TERRAIN_MOVE_INTERVAL   15      /* 150ms between moves */
+#define TERRAIN_SHARE_INTERVAL  30      /* 300ms between broadcasts */
+#define TERRAIN_THREAT_INTERVAL 50      /* 500ms threat assessment */
+
+/* Limits */
+#define TERRAIN_MAX_EXPLORERS   8       /* Max tracked explorers */
+#define TERRAIN_MAX_OBJECTIVES  4       /* Max objectives */
+#define TERRAIN_MAX_THREATS     8       /* Max tracked threats */
+#define TERRAIN_PATH_LEN        32      /* Breadcrumb path length */
+
+/* ==========================================================================
  * Apoptosis Constants
  * ========================================================================== */
 #define HEAP_CRITICAL_PCT   90
@@ -218,6 +395,7 @@ struct route_entry {
 struct election_state {
     uint32_t election_id;       /* Current election ID (random) */
     uint32_t started_at;        /* When election started */
+    uint32_t last_ended;        /* When last election ended (for cooldown) */
     uint32_t my_vote;           /* Who I voted for */
     uint32_t votes_received;    /* Votes for me */
     uint32_t highest_vote_id;   /* Highest ID seen in election */
@@ -228,7 +406,8 @@ struct election_state {
 #define ELECTION_PHASE_NONE     0
 #define ELECTION_PHASE_VOTING   1
 #define ELECTION_PHASE_COUNTING 2
-#define ELECTION_DURATION       300     /* 3 seconds to vote */
+#define ELECTION_DURATION       500     /* 5 seconds to vote (longer for convergence) */
+#define ELECTION_COOLDOWN       1000    /* 10 seconds cooldown after election */
 
 /* ==========================================================================
  * Gossip Cache Entry
@@ -347,6 +526,174 @@ struct nanos_state {
 
     uint32_t jobs_completed;
     uint32_t chunks_processed;
+
+    /* ==========================================================================
+     * Bloom Filter Deduplication State
+     * ========================================================================== */
+    struct {
+        uint8_t  bits[BLOOM_SLOTS][BLOOM_BYTES];  /* Rotating bloom filters */
+        uint8_t  current_slot;
+        uint32_t slot_start_tick;
+        uint32_t insertions;
+        uint32_t duplicates_blocked;
+    } bloom;
+
+    /* ==========================================================================
+     * Tactical Intelligence State
+     * ========================================================================== */
+    struct {
+        /* Local detections pending correlation */
+        struct {
+            uint8_t  detect_type;
+            uint8_t  confidence;
+            uint8_t  sector;
+            uint8_t  intensity;
+            uint32_t timestamp;
+            int16_t  pos_x, pos_y;
+        } local_detections[4];
+        uint8_t local_count;
+
+        /* Active correlated events */
+        struct {
+            uint32_t event_id;
+            uint8_t  alert_level;
+            uint8_t  detect_types;      /* Bitmap of DETECT_* */
+            uint8_t  sector;
+            uint8_t  reporter_count;
+            uint32_t first_seen;
+            uint32_t last_seen;
+            int32_t  est_pos_x, est_pos_y;
+            uint32_t reporters[4];      /* Node IDs */
+        } events[MAX_ACTIVE_EVENTS];
+        uint8_t event_count;
+
+        /* Node position (for correlation) */
+        int32_t my_pos_x, my_pos_y;
+        uint8_t my_sector;
+
+        /* Stats */
+        uint32_t detections_sent;
+        uint32_t correlations_made;
+        uint8_t  sector_activity[SECTOR_COUNT];
+    } tactical;
+
+    /* ==========================================================================
+     * Maze Exploration State
+     * ========================================================================== */
+    struct {
+        /* Shared maze knowledge (16x16 = 256 bytes) */
+        uint8_t  grid[MAZE_SIZE][MAZE_SIZE];  /* Cell states */
+
+        /* Explorer position */
+        uint8_t  pos_x, pos_y;          /* Current position */
+        uint8_t  start_x, start_y;      /* Start position */
+        uint8_t  goal_x, goal_y;        /* Goal position */
+
+        /* Exploration state */
+        uint8_t  active;                /* Am I exploring? */
+        uint8_t  solved;                /* Has maze been solved? */
+        uint8_t  stuck_count;           /* Consecutive failed moves */
+        uint32_t last_move;             /* Tick of last movement */
+        uint32_t last_share;            /* Tick of last discovery share */
+
+        /* Path tracking (breadcrumb trail) */
+        struct {
+            uint8_t x, y;
+        } path[64];                     /* Path from start */
+        uint8_t  path_len;
+
+        /* Other explorers (collaborative) */
+        struct {
+            uint32_t node_id;
+            uint8_t  x, y;
+            uint32_t last_seen;
+        } explorers[MAZE_MAX_EXPLORERS];
+
+        /* Stats */
+        uint32_t cells_explored;        /* Cells I discovered */
+        uint32_t moves_made;
+        uint32_t discoveries_shared;
+    } maze;
+
+    /* ==========================================================================
+     * Tactical Terrain Exploration State
+     * ========================================================================== */
+    struct {
+        /* Terrain grid (32x32 x 2 bytes = 2KB) */
+        struct {
+            uint8_t base;   /* [7:6]cover | [5:3]elevation | [2:0]terrain */
+            uint8_t meta;   /* [7:5]threat | [4:3]strategic | [2:1]pass | [0]explored */
+        } grid[TERRAIN_SIZE][TERRAIN_SIZE];
+
+        /* Procedural generation seed */
+        uint32_t seed;
+
+        /* Explorer position and state */
+        uint8_t  pos_x, pos_y;          /* Current position */
+        uint8_t  start_x, start_y;      /* Starting position */
+        uint8_t  heading;               /* 0-7 for 8 directions */
+        uint8_t  sensor_range;          /* Based on role */
+        uint8_t  active;                /* Exploration active? */
+        uint8_t  mode;                  /* TERRAIN_MODE_* */
+        uint8_t  stuck_count;           /* Consecutive failed moves */
+
+        /* Timing */
+        uint32_t last_move;             /* Tick of last movement */
+        uint32_t last_share;            /* Tick of last broadcast */
+        uint32_t last_threat_check;     /* Tick of last threat assessment */
+
+        /* Path tracking (breadcrumb trail) */
+        struct {
+            uint8_t x, y;
+        } path[TERRAIN_PATH_LEN];
+        uint8_t  path_len;
+
+        /* Current objective */
+        uint8_t  objective_x, objective_y;
+        uint8_t  has_objective;
+        uint8_t  objective_type;        /* 0=explore, 1=capture, 2=defend, 3=evacuate */
+
+        /* Other explorers tracking */
+        struct {
+            uint32_t node_id;
+            uint8_t  x, y;
+            uint8_t  role;
+            uint8_t  sensor_range;
+            uint8_t  heading;
+            uint32_t last_seen;
+            uint16_t cells_explored;
+        } explorers[TERRAIN_MAX_EXPLORERS];
+
+        /* Objectives */
+        struct {
+            uint8_t  x, y;
+            uint8_t  type;              /* 0=resource, 1=capture, 2=defend, 3=evacuate */
+            uint8_t  priority;
+            uint8_t  status;            /* 0=pending, 1=active, 2=complete, 3=failed */
+            uint32_t marked_by;
+        } objectives[TERRAIN_MAX_OBJECTIVES];
+        uint8_t objective_count;
+
+        /* Threat tracking */
+        struct {
+            uint8_t  x, y;
+            uint8_t  threat_level;
+            uint8_t  detect_types;      /* Bitmap from tactical system */
+            uint8_t  confidence;
+            uint8_t  reporter_count;
+            uint32_t first_seen;
+            uint32_t last_updated;
+        } threats[TERRAIN_MAX_THREATS];
+        uint8_t threat_count;
+
+        /* Statistics */
+        uint32_t cells_explored;
+        uint32_t cells_generated;
+        uint32_t threats_reported;
+        uint32_t objectives_found;
+        uint32_t moves_made;
+        uint32_t reports_sent;
+    } terrain;
 };
 
 extern struct nanos_state g_state;

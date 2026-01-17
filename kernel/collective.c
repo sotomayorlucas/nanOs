@@ -239,29 +239,31 @@ void quorum_evaluate(void) {
  * Start a new election
  */
 void election_start(void) {
+    uint32_t now = TICKS();
+
     if (g_state.election.participating) {
         return;  /* Already in an election */
     }
 
-    /* Generate election ID */
-    g_state.election.election_id = RNG();
-    g_state.election.started_at = TICKS();
+    /* Cooldown: don't start new election too soon after previous one */
+    if (g_state.election.last_ended > 0 &&
+        now - g_state.election.last_ended < ELECTION_COOLDOWN) {
+        return;  /* Still in cooldown period */
+    }
+
+    /* Use node_id as election_id for deterministic convergence:
+     * All nodes will converge to the same election (lowest ID wins) */
+    g_state.election.election_id = g_state.node_id;
+    g_state.election.started_at = now;
     g_state.election.participating = 1;
     g_state.election.phase = ELECTION_PHASE_VOTING;
-    g_state.election.votes_received = 0;
+    g_state.election.votes_received = 1;  /* Vote for self */
     g_state.election.highest_vote_id = g_state.node_id;
+    g_state.election.my_vote = g_state.node_id;
 
     /* Become a candidate */
     g_state.previous_role = g_state.role;
     g_state.role = ROLE_CANDIDATE;
-
-    /* Vote for self with probability, or highest ID seen */
-    if ((RNG() % 100) < ELECTION_VOTE_PROB) {
-        g_state.election.my_vote = g_state.node_id;
-        g_state.election.votes_received = 1;
-    } else {
-        g_state.election.my_vote = 0;  /* Will vote for highest ID */
-    }
 
     CONSOLE_COLOR(0x0D);  /* Magenta */
     CONSOLE_PUTS(">> ELECTION STARTED: ");
@@ -302,40 +304,49 @@ void election_process(struct nanos_pheromone* pkt) {
     uint32_t election_id = *(uint32_t*)(pkt->payload);
     uint32_t candidate_id = *(uint32_t*)(pkt->payload + 4);
     uint32_t votes = *(uint32_t*)(pkt->payload + 8);
+    (void)votes;  /* Not used in new algorithm */
 
-    /* If not participating, join this election */
+    /* If not participating, check cooldown before joining */
     if (!g_state.election.participating) {
+        /* Respect cooldown even when receiving election packets */
+        if (g_state.election.last_ended > 0 &&
+            now - g_state.election.last_ended < ELECTION_COOLDOWN) {
+            return;  /* In cooldown, ignore election */
+        }
+
         g_state.election.election_id = election_id;
         g_state.election.started_at = now;
         g_state.election.participating = 1;
         g_state.election.phase = ELECTION_PHASE_VOTING;
-        g_state.election.votes_received = 0;
-        g_state.election.highest_vote_id = candidate_id;
+        g_state.election.votes_received = 1;  /* Vote for self */
+        g_state.election.my_vote = g_state.node_id;
 
-        /* Vote for highest ID seen */
+        /* Start with highest as the greater of candidate or self */
         if (candidate_id > g_state.node_id) {
-            g_state.election.my_vote = candidate_id;
+            g_state.election.highest_vote_id = candidate_id;
         } else {
-            g_state.election.my_vote = g_state.node_id;
             g_state.election.highest_vote_id = g_state.node_id;
         }
 
+        /* Become candidate */
+        g_state.previous_role = g_state.role;
+        g_state.role = ROLE_CANDIDATE;
+
         CONSOLE_PUTS(">> Joined election ");
         CONSOLE_HEX(election_id);
-        CONSOLE_PUTS(", voting for ");
-        CONSOLE_HEX(g_state.election.my_vote);
         CONSOLE_PUTS("\n");
     }
 
-    /* Track highest ID */
-    if (candidate_id > g_state.election.highest_vote_id) {
-        g_state.election.highest_vote_id = candidate_id;
-        g_state.election.my_vote = candidate_id;
+    /* Converge to lowest election_id (deterministic) */
+    if (election_id < g_state.election.election_id) {
+        g_state.election.election_id = election_id;
+        /* Reset start time to sync with other nodes */
+        g_state.election.started_at = now;
     }
 
-    /* If this is a vote for us, count it */
-    if (candidate_id == g_state.node_id) {
-        g_state.election.votes_received += votes;
+    /* Track highest node ID - this becomes the winner */
+    if (candidate_id > g_state.election.highest_vote_id) {
+        g_state.election.highest_vote_id = candidate_id;
     }
 }
 
@@ -353,11 +364,9 @@ void election_check_timeout(void) {
 
         CONSOLE_PUTS(">> Election ended. Highest ID: ");
         CONSOLE_HEX(g_state.election.highest_vote_id);
-        CONSOLE_PUTS(", my votes: ");
-        CONSOLE_DEC(g_state.election.votes_received);
         CONSOLE_PUTS("\n");
 
-        /* Winner is the highest ID */
+        /* Winner is deterministically the highest node ID */
         if (g_state.election.highest_vote_id == g_state.node_id) {
             /* We won! */
             coronation_announce();
@@ -371,9 +380,10 @@ void election_check_timeout(void) {
             CONSOLE_PUTS("\n");
         }
 
-        /* Reset election state */
+        /* Reset election state with cooldown */
         g_state.election.participating = 0;
         g_state.election.phase = ELECTION_PHASE_NONE;
+        g_state.election.last_ended = now;  /* Start cooldown period */
     }
 }
 

@@ -378,6 +378,101 @@ bool is_authenticated_type(uint8_t type) {
 }
 
 /* ==========================================================================
+ * Bloom Filter - O(1) Deduplication
+ * ========================================================================== */
+
+/* Hash functions for bloom filter */
+static uint32_t bloom_hash_0(uint32_t node_id, uint32_t seq, uint8_t type) {
+    uint32_t h = node_id;
+    h ^= seq * 0x85EBCA6B;
+    h ^= type * 0xC2B2AE35;
+    h ^= h >> 16;
+    h *= 0x85EBCA6B;
+    return h % BLOOM_BITS;
+}
+
+static uint32_t bloom_hash_1(uint32_t node_id, uint32_t seq, uint8_t type) {
+    uint32_t h = seq;
+    h ^= node_id * 0xCC9E2D51;
+    h ^= type * 0x1B873593;
+    h ^= h >> 15;
+    h *= 0xCC9E2D51;
+    return h % BLOOM_BITS;
+}
+
+static uint32_t bloom_hash_2(uint32_t node_id, uint32_t seq, uint8_t type) {
+    uint32_t h = type | (seq << 8);
+    h ^= node_id;
+    h = (h ^ (h >> 16)) * 0x7FEB352D;
+    h = (h ^ (h >> 15)) * 0x846CA68B;
+    return (h ^ (h >> 16)) % BLOOM_BITS;
+}
+
+/* Initialize bloom filter */
+static void bloom_init(void) {
+    for (int slot = 0; slot < BLOOM_SLOTS; slot++) {
+        for (int i = 0; i < BLOOM_BYTES; i++) {
+            g_state.bloom.bits[slot][i] = 0;
+        }
+    }
+    g_state.bloom.current_slot = 0;
+    g_state.bloom.slot_start_tick = 0;
+    g_state.bloom.insertions = 0;
+    g_state.bloom.duplicates_blocked = 0;
+}
+
+/* Check if bit is set in bloom filter */
+static int bloom_test_bit(uint8_t* bits, uint32_t bit_pos) {
+    return (bits[bit_pos / 8] >> (bit_pos % 8)) & 1;
+}
+
+/* Set bit in bloom filter */
+static void bloom_set_bit(uint8_t* bits, uint32_t bit_pos) {
+    bits[bit_pos / 8] |= (1 << (bit_pos % 8));
+}
+
+/* Check and add packet to bloom filter - returns true if NEW, false if duplicate */
+static bool bloom_check_and_add(struct nanos_pheromone* pkt) {
+    uint32_t now = ticks;
+
+    /* Rotate slot if window expired */
+    if (now - g_state.bloom.slot_start_tick > (BLOOM_WINDOW_MS / 10)) {
+        g_state.bloom.current_slot = (g_state.bloom.current_slot + 1) % BLOOM_SLOTS;
+        /* Clear new slot */
+        for (int i = 0; i < BLOOM_BYTES; i++) {
+            g_state.bloom.bits[g_state.bloom.current_slot][i] = 0;
+        }
+        g_state.bloom.slot_start_tick = now;
+    }
+
+    /* Calculate hashes */
+    uint32_t h0 = bloom_hash_0(pkt->node_id, pkt->seq, pkt->type);
+    uint32_t h1 = bloom_hash_1(pkt->node_id, pkt->seq, pkt->type);
+    uint32_t h2 = bloom_hash_2(pkt->node_id, pkt->seq, pkt->type);
+
+    /* Check ALL slots (full time window) */
+    for (int slot = 0; slot < BLOOM_SLOTS; slot++) {
+        uint8_t* bits = g_state.bloom.bits[slot];
+        if (bloom_test_bit(bits, h0) &&
+            bloom_test_bit(bits, h1) &&
+            bloom_test_bit(bits, h2)) {
+            /* Probably seen before */
+            g_state.bloom.duplicates_blocked++;
+            return false;
+        }
+    }
+
+    /* Not seen - add to current slot */
+    uint8_t* current = g_state.bloom.bits[g_state.bloom.current_slot];
+    bloom_set_bit(current, h0);
+    bloom_set_bit(current, h1);
+    bloom_set_bit(current, h2);
+    g_state.bloom.insertions++;
+
+    return true;  /* New packet */
+}
+
+/* ==========================================================================
  * Gossip Protocol - Prevent Broadcast Storms
  * ========================================================================== */
 uint32_t gossip_hash(struct nanos_pheromone* pkt) {
@@ -1083,8 +1178,9 @@ static void process_result(struct nanos_pheromone* pkt) {
 }
 
 /* ==========================================================================
- * Workload: Sensor Network
+ * Workload: Sensor Network (DISABLED - too spammy)
  * ========================================================================== */
+#if 0
 static void sensor_generate(void) {
     /* Generate simulated sensor readings */
     g_state.sensors[0].value = 200 + (random() % 100);  /* Temp: 20.0-30.0 C (x10) */
@@ -1136,6 +1232,7 @@ static void sensor_generate(void) {
 
     g_state.last_sensor_reading = ticks;
 }
+#endif /* sensor_generate disabled */
 
 static void process_sensor(struct nanos_pheromone* pkt) {
     /* Aggregate received sensor data */
@@ -1150,6 +1247,7 @@ static void process_sensor(struct nanos_pheromone* pkt) {
     }
 }
 
+#if 0 /* sensor_aggregate disabled - too spammy */
 static void sensor_aggregate(void) {
     if (g_state.role != ROLE_QUEEN) return;
     if (g_state.sensors[0].count == 0) return;
@@ -1187,6 +1285,1507 @@ static void sensor_aggregate(void) {
     }
 
     g_state.last_aggregate = ticks;
+}
+#endif /* Sensor network disabled */
+
+/* ==========================================================================
+ * Tactical Intelligence System - Sensor Correlation
+ * ========================================================================== */
+
+static const char* detect_type_name(uint8_t type) {
+    switch (type) {
+        case DETECT_MOTION:   return "MOTION";
+        case DETECT_ACOUSTIC: return "ACOUSTIC";
+        case DETECT_THERMAL:  return "THERMAL";
+        case DETECT_RF:       return "RF";
+        case DETECT_MAGNETIC: return "MAGNETIC";
+        case DETECT_PRESSURE: return "PRESSURE";
+        default:              return "UNKNOWN";
+    }
+}
+
+static const char* alert_level_name(uint8_t level) {
+    switch (level) {
+        case ALERT_ANOMALY:   return "ANOMALY";
+        case ALERT_CONTACT:   return "CONTACT";
+        case ALERT_PROBABLE:  return "PROBABLE";
+        case ALERT_CONFIRMED: return "CONFIRMED";
+        case ALERT_CRITICAL:  return "CRITICAL";
+        default:              return "NONE";
+    }
+}
+
+/* Initialize tactical system */
+static void tactical_init(void) {
+    g_state.tactical.local_count = 0;
+    g_state.tactical.event_count = 0;
+    g_state.tactical.my_pos_x = (random() % 1000) - 500;  /* Random position -500 to 500 */
+    g_state.tactical.my_pos_y = (random() % 1000) - 500;
+    g_state.tactical.my_sector = random() % SECTOR_COUNT;
+    g_state.tactical.detections_sent = 0;
+    g_state.tactical.correlations_made = 0;
+    for (int i = 0; i < SECTOR_COUNT; i++) {
+        g_state.tactical.sector_activity[i] = 0;
+    }
+}
+
+#if 0 /* Tactical send functions disabled - too spammy */
+/* Calculate sector from relative position */
+static uint8_t calc_sector(int16_t dx, int16_t dy) {
+    if (dy > 0) {
+        if (dx > dy) return 2;        /* E */
+        if (dx < -dy) return 6;       /* W */
+        if (dx > 0) return 1;         /* NE */
+        if (dx < 0) return 7;         /* NW */
+        return 0;                      /* N */
+    } else {
+        if (dx > -dy) return 2;       /* E */
+        if (dx < dy) return 6;        /* W */
+        if (dx > 0) return 3;         /* SE */
+        if (dx < 0) return 5;         /* SW */
+        return 4;                      /* S */
+    }
+}
+
+/* Send detection to swarm */
+static void tactical_send_detection(uint8_t type, uint8_t intensity,
+                                     int16_t rel_x, int16_t rel_y) {
+    struct nanos_pheromone pkt;
+
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_DETECT;
+    pkt.ttl = 5;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    uint8_t confidence = 50 + (intensity / 5);
+    if (confidence > 100) confidence = 100;
+    uint8_t sector = calc_sector(rel_x, rel_y);
+
+    uint8_t* p = pkt.payload;
+    *p++ = type;
+    *p++ = confidence;
+    *p++ = sector;
+    *p++ = intensity;
+    *(uint32_t*)p = ticks; p += 4;
+    *(int16_t*)p = g_state.tactical.my_pos_x + rel_x; p += 2;
+    *(int16_t*)p = g_state.tactical.my_pos_y + rel_y; p += 2;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+    g_state.tactical.detections_sent++;
+}
+#endif
+
+/* Find matching event for correlation */
+static int find_matching_event(uint8_t sector, int32_t pos_x, int32_t pos_y) {
+    for (int i = 0; i < g_state.tactical.event_count; i++) {
+        /* Check timeout */
+        if (ticks - g_state.tactical.events[i].last_seen > (EVENT_TIMEOUT_MS / 10)) {
+            continue;
+        }
+        /* Check sector match (adjacent sectors OK) */
+        int8_t sd = g_state.tactical.events[i].sector - sector;
+        if (sd < 0) sd = -sd;
+        if (sd > 1 && sd < 7) continue;
+
+        /* Check distance */
+        int32_t dx = pos_x - g_state.tactical.events[i].est_pos_x;
+        int32_t dy = pos_y - g_state.tactical.events[i].est_pos_y;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx + dy < 500) {  /* Within 5m */
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Process incoming detection */
+static void tactical_process_detection(struct nanos_pheromone* pkt) {
+    uint8_t* p = pkt->payload;
+    uint8_t det_type = *p++;
+    uint8_t confidence = *p++;
+    uint8_t sector = *p++;
+    (void)*p++;  /* intensity - skip */
+    p += 4;      /* timestamp - skip */
+    int16_t pos_x = *(int16_t*)p; p += 2;
+    int16_t pos_y = *(int16_t*)p;
+
+    /* Update sector activity */
+    g_state.tactical.sector_activity[sector % SECTOR_COUNT]++;
+
+    /* Try to correlate with existing event */
+    int evt_idx = find_matching_event(sector, pos_x, pos_y);
+
+    if (evt_idx >= 0) {
+        /* Update existing event */
+        g_state.tactical.events[evt_idx].detect_types |= (1 << det_type);
+        g_state.tactical.events[evt_idx].last_seen = ticks;
+
+        /* Check if new reporter */
+        int is_new = 1;
+        for (int i = 0; i < g_state.tactical.events[evt_idx].reporter_count && i < 4; i++) {
+            if (g_state.tactical.events[evt_idx].reporters[i] == pkt->node_id) {
+                is_new = 0;
+                break;
+            }
+        }
+        if (is_new && g_state.tactical.events[evt_idx].reporter_count < 4) {
+            g_state.tactical.events[evt_idx].reporters[
+                g_state.tactical.events[evt_idx].reporter_count++] = pkt->node_id;
+        }
+
+        /* Update alert level based on reporters and types */
+        uint8_t type_count = 0;
+        for (int i = 0; i < 8; i++) {
+            if (g_state.tactical.events[evt_idx].detect_types & (1 << i)) type_count++;
+        }
+
+        if (g_state.tactical.events[evt_idx].reporter_count >= 4 && type_count >= 2) {
+            g_state.tactical.events[evt_idx].alert_level = ALERT_CONFIRMED;
+        } else if (g_state.tactical.events[evt_idx].reporter_count >= 3 || type_count >= 2) {
+            g_state.tactical.events[evt_idx].alert_level = ALERT_PROBABLE;
+        } else if (g_state.tactical.events[evt_idx].reporter_count >= 2) {
+            g_state.tactical.events[evt_idx].alert_level = ALERT_CONTACT;
+        }
+
+        /* Elevation to CRITICAL after 5 seconds persistence */
+        if (ticks - g_state.tactical.events[evt_idx].first_seen > 500 &&
+            g_state.tactical.events[evt_idx].alert_level >= ALERT_PROBABLE) {
+            g_state.tactical.events[evt_idx].alert_level = ALERT_CRITICAL;
+        }
+    } else if (g_state.tactical.event_count < MAX_ACTIVE_EVENTS) {
+        /* Create new event */
+        evt_idx = g_state.tactical.event_count++;
+        g_state.tactical.events[evt_idx].event_id = random();
+        g_state.tactical.events[evt_idx].alert_level = ALERT_ANOMALY;
+        g_state.tactical.events[evt_idx].detect_types = (1 << det_type);
+        g_state.tactical.events[evt_idx].sector = sector;
+        g_state.tactical.events[evt_idx].reporter_count = 1;
+        g_state.tactical.events[evt_idx].reporters[0] = pkt->node_id;
+        g_state.tactical.events[evt_idx].first_seen = ticks;
+        g_state.tactical.events[evt_idx].last_seen = ticks;
+        g_state.tactical.events[evt_idx].est_pos_x = pos_x;
+        g_state.tactical.events[evt_idx].est_pos_y = pos_y;
+    }
+
+    /* Display on screen */
+    if (g_state.role == ROLE_QUEEN || g_state.role == ROLE_SENTINEL) {
+        vga_set_color(0x0E);
+        vga_puts("[DETECT] ");
+        vga_puts(detect_type_name(det_type));
+        vga_puts(" from ");
+        vga_put_hex(pkt->node_id);
+        vga_puts(" sector=");
+        vga_put_dec(sector);
+        vga_puts(" conf=");
+        vga_put_dec(confidence);
+        if (evt_idx >= 0 && g_state.tactical.events[evt_idx].alert_level >= ALERT_CONTACT) {
+            vga_set_color(0x0C);
+            vga_puts(" >> ");
+            vga_puts(alert_level_name(g_state.tactical.events[evt_idx].alert_level));
+        }
+        vga_puts("\n");
+        vga_set_color(0x0A);
+
+        serial_puts("[DETECT] type=");
+        serial_puts(detect_type_name(det_type));
+        serial_puts(" sector=");
+        serial_put_dec(sector);
+        serial_puts(" alert=");
+        if (evt_idx >= 0) {
+            serial_puts(alert_level_name(g_state.tactical.events[evt_idx].alert_level));
+        } else {
+            serial_puts("NEW");
+        }
+        serial_puts("\n");
+    }
+}
+
+/* Simulate sensor detections for testing (DISABLED - too spammy) */
+#if 0
+static void tactical_simulate(void) {
+    static uint32_t last_sim = 0;
+    if (ticks - last_sim < 300) return;  /* Every 3 seconds */
+    last_sim = ticks;
+
+    /* 20% chance of detection */
+    if ((random() % 100) > 20) return;
+
+    uint8_t type = (random() % 4) + 1;  /* MOTION to RF */
+    uint8_t intensity = 50 + (random() % 150);
+    int16_t rel_x = (random() % 400) - 200;
+    int16_t rel_y = (random() % 400) - 200;
+
+    tactical_send_detection(type, intensity, rel_x, rel_y);
+
+    vga_set_color(0x0D);
+    vga_puts("[SIM] Detected ");
+    vga_puts(detect_type_name(type));
+    vga_puts(" intensity=");
+    vga_put_dec(intensity);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+}
+
+/* Clean up expired events */
+static void tactical_maintenance(void) {
+    int write_idx = 0;
+    for (int i = 0; i < g_state.tactical.event_count; i++) {
+        if (ticks - g_state.tactical.events[i].last_seen < (EVENT_TIMEOUT_MS / 10)) {
+            if (write_idx != i) {
+                g_state.tactical.events[write_idx] = g_state.tactical.events[i];
+            }
+            write_idx++;
+        }
+    }
+    g_state.tactical.event_count = write_idx;
+
+    /* Decay sector activity */
+    for (int i = 0; i < SECTOR_COUNT; i++) {
+        if (g_state.tactical.sector_activity[i] > 0) {
+            g_state.tactical.sector_activity[i]--;
+        }
+    }
+}
+#endif /* Tactical simulation disabled */
+
+/* ==========================================================================
+ * Maze Exploration - Collaborative Pathfinding
+ * ========================================================================== */
+
+/* Direction deltas: N, E, S, W */
+static const int8_t dx[4] = {  0,  1,  0, -1 };
+static const int8_t dy[4] = { -1,  0,  1,  0 };
+
+/* Initialize maze exploration state */
+static void maze_init(void) {
+    /* Clear grid - all unexplored */
+    for (int y = 0; y < MAZE_SIZE; y++) {
+        for (int x = 0; x < MAZE_SIZE; x++) {
+            g_state.maze.grid[y][x] = MAZE_UNEXPLORED;
+        }
+    }
+
+    g_state.maze.active = 0;
+    g_state.maze.solved = 0;
+    g_state.maze.stuck_count = 0;
+    g_state.maze.path_len = 0;
+    g_state.maze.last_move = 0;
+    g_state.maze.last_share = 0;
+
+    /* Clear explorer tracking */
+    for (int i = 0; i < MAZE_MAX_EXPLORERS; i++) {
+        g_state.maze.explorers[i].node_id = 0;
+    }
+
+    g_state.maze.cells_explored = 0;
+    g_state.maze.moves_made = 0;
+    g_state.maze.discoveries_shared = 0;
+}
+
+/* Check if position is valid and passable */
+static bool maze_can_move(uint8_t x, uint8_t y) {
+    if (x >= MAZE_SIZE || y >= MAZE_SIZE) return false;
+    uint8_t cell = g_state.maze.grid[y][x];
+    return cell != MAZE_WALL;
+}
+
+/* Count unexplored neighbors */
+static int maze_unexplored_neighbors(uint8_t x, uint8_t y) {
+    int count = 0;
+    for (int dir = 0; dir < DIR_COUNT; dir++) {
+        int nx = x + dx[dir];
+        int ny = y + dy[dir];
+        if (nx >= 0 && nx < MAZE_SIZE && ny >= 0 && ny < MAZE_SIZE) {
+            if (g_state.maze.grid[ny][nx] == MAZE_UNEXPLORED) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+/* Check if another explorer is at position */
+static bool maze_explorer_at(uint8_t x, uint8_t y) {
+    for (int i = 0; i < MAZE_MAX_EXPLORERS; i++) {
+        if (g_state.maze.explorers[i].node_id != 0 &&
+            g_state.maze.explorers[i].node_id != g_state.node_id &&
+            g_state.maze.explorers[i].x == x &&
+            g_state.maze.explorers[i].y == y &&
+            ticks - g_state.maze.explorers[i].last_seen < 100) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Choose next move direction using swarm logic */
+static int maze_choose_direction(void) {
+    uint8_t x = g_state.maze.pos_x;
+    uint8_t y = g_state.maze.pos_y;
+
+    /* Priority 1: Move toward goal if visible path */
+    int best_dir = -1;
+    int best_score = -1000;
+
+    for (int dir = 0; dir < DIR_COUNT; dir++) {
+        int nx = x + dx[dir];
+        int ny = y + dy[dir];
+
+        if (!maze_can_move(nx, ny)) continue;
+        if (maze_explorer_at(nx, ny)) continue;  /* Avoid other explorers */
+
+        int score = 0;
+
+        /* Prefer unexplored cells */
+        if (g_state.maze.grid[ny][nx] == MAZE_UNEXPLORED) {
+            score += 50;
+        }
+
+        /* Prefer cells with more unexplored neighbors (frontier) */
+        score += maze_unexplored_neighbors(nx, ny) * 10;
+
+        /* Slight preference toward goal direction */
+        int goal_dx = (int)g_state.maze.goal_x - nx;
+        int goal_dy = (int)g_state.maze.goal_y - ny;
+        int goal_dist = (goal_dx < 0 ? -goal_dx : goal_dx) +
+                        (goal_dy < 0 ? -goal_dy : goal_dy);
+        score -= goal_dist;
+
+        /* Add randomness to prevent deadlocks */
+        score += (random() % 20);
+
+        /* Avoid backtracking if not stuck */
+        if (g_state.maze.path_len > 0 && g_state.maze.stuck_count < 3) {
+            if (g_state.maze.path[g_state.maze.path_len - 1].x == nx &&
+                g_state.maze.path[g_state.maze.path_len - 1].y == ny) {
+                score -= 30;
+            }
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best_dir = dir;
+        }
+    }
+
+    return best_dir;
+}
+
+/* Make a move in the maze */
+static void maze_move(void) {
+    if (!g_state.maze.active || g_state.maze.solved) return;
+    if (ticks - g_state.maze.last_move < MAZE_MOVE_INTERVAL) return;
+
+    g_state.maze.last_move = ticks;
+
+    /* Check if we reached the goal */
+    if (g_state.maze.pos_x == g_state.maze.goal_x &&
+        g_state.maze.pos_y == g_state.maze.goal_y) {
+
+        g_state.maze.solved = 1;
+
+        vga_set_color(0x0D);
+        vga_puts(">> MAZE SOLVED! Path length: ");
+        vga_put_dec(g_state.maze.path_len);
+        vga_puts("\n");
+        vga_set_color(0x0A);
+
+        serial_puts("[MAZE] SOLVED by node=");
+        serial_put_hex(g_state.node_id);
+        serial_puts(" path_len=");
+        serial_put_dec(g_state.maze.path_len);
+        serial_puts("\n");
+
+        /* Broadcast solution */
+        struct nanos_pheromone pkt;
+        pkt.magic = NANOS_MAGIC;
+        pkt.node_id = g_state.node_id;
+        pkt.type = PHEROMONE_MAZE_SOLVED;
+        pkt.ttl = GRADIENT_MAX_HOPS;
+        pkt.flags = 0;
+        pkt.version = NANOS_VERSION;
+        pkt.seq = g_state.seq_counter++;
+        pkt.dest_id = 0;
+        pkt.distance = g_state.distance_to_queen;
+        pkt.hop_count = 0;
+        PKT_SET_ROLE(&pkt, g_state.role);
+
+        /* Payload: path_len(1) + first 15 path points */
+        pkt.payload[0] = g_state.maze.path_len;
+        for (int i = 0; i < 15 && i < g_state.maze.path_len; i++) {
+            pkt.payload[1 + i*2] = g_state.maze.path[i].x;
+            pkt.payload[2 + i*2] = g_state.maze.path[i].y;
+        }
+
+        for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+        e1000_send(&pkt, sizeof(pkt));
+        g_state.packets_tx++;
+
+        return;
+    }
+
+    /* Choose direction */
+    int dir = maze_choose_direction();
+
+    if (dir < 0) {
+        /* Stuck - try backtracking */
+        g_state.maze.stuck_count++;
+        if (g_state.maze.path_len > 0) {
+            g_state.maze.path_len--;
+            g_state.maze.pos_x = g_state.maze.path[g_state.maze.path_len].x;
+            g_state.maze.pos_y = g_state.maze.path[g_state.maze.path_len].y;
+        }
+        return;
+    }
+
+    g_state.maze.stuck_count = 0;
+
+    /* Record current position in path */
+    if (g_state.maze.path_len < 64) {
+        g_state.maze.path[g_state.maze.path_len].x = g_state.maze.pos_x;
+        g_state.maze.path[g_state.maze.path_len].y = g_state.maze.pos_y;
+        g_state.maze.path_len++;
+    }
+
+    /* Move to new position */
+    uint8_t new_x = g_state.maze.pos_x + dx[dir];
+    uint8_t new_y = g_state.maze.pos_y + dy[dir];
+    g_state.maze.pos_x = new_x;
+    g_state.maze.pos_y = new_y;
+    g_state.maze.moves_made++;
+
+    /* Mark as explored if it was unexplored */
+    if (g_state.maze.grid[new_y][new_x] == MAZE_UNEXPLORED) {
+        g_state.maze.grid[new_y][new_x] = MAZE_EXPLORED;
+        g_state.maze.cells_explored++;
+    }
+}
+
+/* Share discoveries with other nodes */
+static void maze_share_discoveries(void) {
+    if (!g_state.maze.active) return;
+    if (ticks - g_state.maze.last_share < MAZE_SHARE_INTERVAL) return;
+
+    g_state.maze.last_share = ticks;
+
+    /* Send position update */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_MAZE_MOVE;
+    pkt.ttl = 2;  /* Local broadcast */
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Payload: x(1) + y(1) + cells_explored(2) */
+    pkt.payload[0] = g_state.maze.pos_x;
+    pkt.payload[1] = g_state.maze.pos_y;
+    pkt.payload[2] = g_state.maze.cells_explored & 0xFF;
+    pkt.payload[3] = (g_state.maze.cells_explored >> 8) & 0xFF;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+    g_state.maze.discoveries_shared++;
+
+    /* Also share discovered cells */
+    if (g_state.maze.cells_explored > 0) {
+        pkt.type = PHEROMONE_MAZE_DISCOVER;
+        pkt.seq = g_state.seq_counter++;
+
+        /* Pack recent discoveries: up to 10 cells */
+        int idx = 0;
+        for (int y = 0; y < MAZE_SIZE && idx < 10; y++) {
+            for (int x = 0; x < MAZE_SIZE && idx < 10; x++) {
+                uint8_t cell = g_state.maze.grid[y][x];
+                if (cell == MAZE_EXPLORED || cell == MAZE_WALL) {
+                    pkt.payload[idx * 3] = x;
+                    pkt.payload[idx * 3 + 1] = y;
+                    pkt.payload[idx * 3 + 2] = cell;
+                    idx++;
+                }
+            }
+        }
+        pkt.payload[30] = idx;  /* Count of cells */
+
+        e1000_send(&pkt, sizeof(pkt));
+        g_state.packets_tx++;
+    }
+}
+
+/* Process maze initialization from dashboard */
+static void maze_process_init(struct nanos_pheromone* pkt) {
+    /* Payload format:
+     * [0]: start_x, [1]: start_y
+     * [2]: goal_x, [3]: goal_y
+     * [4-31]: packed wall bits (first 224 bits = 14 rows)
+     */
+    g_state.maze.start_x = pkt->payload[0] % MAZE_SIZE;
+    g_state.maze.start_y = pkt->payload[1] % MAZE_SIZE;
+    g_state.maze.goal_x = pkt->payload[2] % MAZE_SIZE;
+    g_state.maze.goal_y = pkt->payload[3] % MAZE_SIZE;
+
+    /* Clear and set up maze */
+    for (int y = 0; y < MAZE_SIZE; y++) {
+        for (int x = 0; x < MAZE_SIZE; x++) {
+            g_state.maze.grid[y][x] = MAZE_UNEXPLORED;
+        }
+    }
+
+    /* Unpack walls from payload */
+    for (int i = 0; i < 28 * 8 && i < MAZE_CELLS; i++) {
+        int byte_idx = 4 + (i / 8);
+        int bit_idx = i % 8;
+        if (byte_idx < 32 && (pkt->payload[byte_idx] & (1 << bit_idx))) {
+            int x = i % MAZE_SIZE;
+            int y = i / MAZE_SIZE;
+            g_state.maze.grid[y][x] = MAZE_WALL;
+        }
+    }
+
+    /* Mark start and goal */
+    g_state.maze.grid[g_state.maze.start_y][g_state.maze.start_x] = MAZE_START;
+    g_state.maze.grid[g_state.maze.goal_y][g_state.maze.goal_x] = MAZE_GOAL;
+
+    /* Position at start with some offset based on node_id */
+    g_state.maze.pos_x = g_state.maze.start_x;
+    g_state.maze.pos_y = g_state.maze.start_y;
+
+    /* Reset exploration state */
+    g_state.maze.active = 1;
+    g_state.maze.solved = 0;
+    g_state.maze.stuck_count = 0;
+    g_state.maze.path_len = 0;
+    g_state.maze.last_move = ticks;
+    g_state.maze.last_share = ticks;
+    g_state.maze.cells_explored = 1;  /* Start cell is explored */
+    g_state.maze.moves_made = 0;
+
+    vga_set_color(0x0E);
+    vga_puts(">> MAZE STARTED: ");
+    vga_put_dec(g_state.maze.start_x);
+    vga_puts(",");
+    vga_put_dec(g_state.maze.start_y);
+    vga_puts(" -> ");
+    vga_put_dec(g_state.maze.goal_x);
+    vga_puts(",");
+    vga_put_dec(g_state.maze.goal_y);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[MAZE] Started exploration from ");
+    serial_put_dec(g_state.maze.start_x);
+    serial_puts(",");
+    serial_put_dec(g_state.maze.start_y);
+    serial_puts(" to ");
+    serial_put_dec(g_state.maze.goal_x);
+    serial_puts(",");
+    serial_put_dec(g_state.maze.goal_y);
+    serial_puts("\n");
+
+    /* Relay to other nodes */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process discovery from another node */
+static void maze_process_discover(struct nanos_pheromone* pkt) {
+    if (!g_state.maze.active) return;
+
+    int count = pkt->payload[30];
+    if (count > 10) count = 10;
+
+    for (int i = 0; i < count; i++) {
+        uint8_t x = pkt->payload[i * 3];
+        uint8_t y = pkt->payload[i * 3 + 1];
+        uint8_t cell = pkt->payload[i * 3 + 2];
+
+        if (x < MAZE_SIZE && y < MAZE_SIZE) {
+            /* Only update if we haven't explored this cell yet */
+            if (g_state.maze.grid[y][x] == MAZE_UNEXPLORED) {
+                g_state.maze.grid[y][x] = cell;
+            }
+        }
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process position update from another explorer */
+static void maze_process_move(struct nanos_pheromone* pkt) {
+    if (!g_state.maze.active) return;
+
+    uint32_t sender = pkt->node_id;
+    uint8_t x = pkt->payload[0];
+    uint8_t y = pkt->payload[1];
+
+    /* Update explorer tracking */
+    int slot = -1;
+    for (int i = 0; i < MAZE_MAX_EXPLORERS; i++) {
+        if (g_state.maze.explorers[i].node_id == sender) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 && g_state.maze.explorers[i].node_id == 0) {
+            slot = i;
+        }
+    }
+
+    if (slot >= 0) {
+        g_state.maze.explorers[slot].node_id = sender;
+        g_state.maze.explorers[slot].x = x;
+        g_state.maze.explorers[slot].y = y;
+        g_state.maze.explorers[slot].last_seen = ticks;
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process solution announcement */
+static void maze_process_solved(struct nanos_pheromone* pkt) {
+    if (g_state.maze.solved) return;  /* Already know it's solved */
+
+    g_state.maze.solved = 1;
+    g_state.maze.active = 0;
+
+    uint8_t path_len = pkt->payload[0];
+
+    vga_set_color(0x0D);
+    vga_puts(">> MAZE SOLVED by ");
+    vga_put_hex(pkt->node_id);
+    vga_puts(" (");
+    vga_put_dec(path_len);
+    vga_puts(" steps)\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[MAZE] Solved by node=");
+    serial_put_hex(pkt->node_id);
+    serial_puts(" path_len=");
+    serial_put_dec(path_len);
+    serial_puts("\n");
+
+    /* Mark path cells */
+    for (int i = 0; i < 15 && i < path_len; i++) {
+        uint8_t px = pkt->payload[1 + i*2];
+        uint8_t py = pkt->payload[2 + i*2];
+        if (px < MAZE_SIZE && py < MAZE_SIZE) {
+            g_state.maze.grid[py][px] = MAZE_PATH;
+        }
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* ==========================================================================
+ * Tactical Terrain Exploration System
+ * ========================================================================== */
+
+/* 8-directional movement deltas: N, NE, E, SE, S, SW, W, NW */
+static const int8_t terrain_dx[8] = {  0,  1,  1,  1,  0, -1, -1, -1 };
+static const int8_t terrain_dy[8] = { -1, -1,  0,  1,  1,  1,  0, -1 };
+
+/* Default cover values per terrain type */
+static const uint8_t terrain_default_cover[8] = {
+    COVER_NONE,     /* OPEN */
+    COVER_MEDIUM,   /* FOREST */
+    COVER_HIGH,     /* URBAN */
+    COVER_NONE,     /* WATER */
+    COVER_LOW,      /* ROCKY */
+    COVER_NONE,     /* MARSH */
+    COVER_NONE,     /* ROAD */
+    COVER_HIGH      /* IMPASSABLE */
+};
+
+/* Default passability per terrain type */
+static const uint8_t terrain_default_pass[8] = {
+    PASS_NORMAL,    /* OPEN */
+    PASS_SLOW,      /* FOREST */
+    PASS_NORMAL,    /* URBAN */
+    PASS_BLOCKED,   /* WATER */
+    PASS_DIFFICULT, /* ROCKY */
+    PASS_DIFFICULT, /* MARSH */
+    PASS_NORMAL,    /* ROAD (bonus handled elsewhere) */
+    PASS_BLOCKED    /* IMPASSABLE */
+};
+
+/* Deterministic hash function for procedural generation */
+static uint32_t terrain_hash(uint32_t seed, uint8_t x, uint8_t y) {
+    /* FNV-1a hash variant for terrain generation */
+    uint32_t hash = seed ^ 0x811c9dc5;
+    hash ^= x;
+    hash *= 0x01000193;
+    hash ^= y;
+    hash *= 0x01000193;
+    hash ^= (x * y);
+    hash *= 0x01000193;
+    /* Additional mixing for better distribution */
+    hash ^= hash >> 16;
+    hash *= 0x85ebca6b;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+/* Generate terrain type from elevation and hash */
+static uint8_t terrain_from_elevation(uint8_t elevation, uint32_t hash) {
+    uint8_t r = (hash >> 8) % 100;
+
+    if (elevation >= 6) {
+        /* High altitude: rocky or impassable */
+        return (r < 70) ? TERRAIN_ROCKY : TERRAIN_IMPASSABLE;
+    } else if (elevation >= 4) {
+        /* Medium-high: forest, rocky, or open */
+        if (r < 40) return TERRAIN_FOREST;
+        if (r < 70) return TERRAIN_OPEN;
+        return TERRAIN_ROCKY;
+    } else if (elevation <= 1) {
+        /* Low altitude: water, marsh, or open */
+        if (r < 30) return TERRAIN_WATER;
+        if (r < 50) return TERRAIN_MARSH;
+        return TERRAIN_OPEN;
+    } else {
+        /* Medium: varied terrain */
+        if (r < 25) return TERRAIN_FOREST;
+        if (r < 50) return TERRAIN_OPEN;
+        if (r < 65) return TERRAIN_URBAN;
+        if (r < 80) return TERRAIN_ROAD;
+        return TERRAIN_ROCKY;
+    }
+}
+
+/* Generate a single terrain cell using procedural generation */
+static void terrain_generate_cell(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return;
+
+    uint32_t hash = terrain_hash(g_state.terrain.seed, x, y);
+
+    /* Generate elevation (0-7) using noise-like distribution */
+    uint8_t elevation = (hash % 8);
+    /* Smooth elevation with neighbor influence */
+    if (x > 0 && y > 0) {
+        uint32_t neighbor_hash = terrain_hash(g_state.terrain.seed, x-1, y-1);
+        elevation = (elevation + (neighbor_hash % 8)) / 2;
+    }
+
+    /* Generate terrain type based on elevation */
+    uint8_t terrain_type = terrain_from_elevation(elevation, hash);
+
+    /* Get default cover and passability */
+    uint8_t cover = terrain_default_cover[terrain_type];
+    uint8_t pass = terrain_default_pass[terrain_type];
+
+    /* Pack base byte: [7:6]cover | [5:3]elevation | [2:0]terrain */
+    g_state.terrain.grid[y][x].base =
+        terrain_type |
+        (elevation << TERRAIN_ELEV_SHIFT) |
+        (cover << TERRAIN_COVER_SHIFT);
+
+    /* Pack meta byte: [7:5]threat | [4:3]strategic | [2:1]pass | [0]explored
+     * Start with unknown threat, no strategic value, appropriate passability */
+    g_state.terrain.grid[y][x].meta =
+        (THREAT_UNKNOWN << TERRAIN_THREAT_SHIFT) |
+        (STRATEGIC_NONE << TERRAIN_STRAT_SHIFT) |
+        (pass << TERRAIN_PASS_SHIFT) |
+        TERRAIN_EXPLORED;  /* Mark as generated/explored */
+
+    g_state.terrain.cells_generated++;
+}
+
+/* Initialize terrain exploration state */
+static void terrain_init(void) {
+    /* Clear entire terrain grid */
+    for (int y = 0; y < TERRAIN_SIZE; y++) {
+        for (int x = 0; x < TERRAIN_SIZE; x++) {
+            g_state.terrain.grid[y][x].base = 0;
+            g_state.terrain.grid[y][x].meta = 0;
+        }
+    }
+
+    g_state.terrain.seed = 0;
+    g_state.terrain.active = 0;
+    g_state.terrain.mode = TERRAIN_MODE_EXPLORE;
+    g_state.terrain.stuck_count = 0;
+    g_state.terrain.path_len = 0;
+    g_state.terrain.last_move = 0;
+    g_state.terrain.last_share = 0;
+    g_state.terrain.last_threat_check = 0;
+    g_state.terrain.has_objective = 0;
+    g_state.terrain.objective_count = 0;
+    g_state.terrain.threat_count = 0;
+
+    /* Set sensor range based on role */
+    switch (g_state.role) {
+        case ROLE_EXPLORER:
+            g_state.terrain.sensor_range = SENSOR_RANGE_SCOUT;
+            break;
+        case ROLE_SENTINEL:
+            g_state.terrain.sensor_range = SENSOR_RANGE_SENTINEL;
+            break;
+        case ROLE_QUEEN:
+            g_state.terrain.sensor_range = SENSOR_RANGE_QUEEN;
+            break;
+        default:
+            g_state.terrain.sensor_range = SENSOR_RANGE_WORKER;
+    }
+
+    /* Clear explorer tracking */
+    for (int i = 0; i < TERRAIN_MAX_EXPLORERS; i++) {
+        g_state.terrain.explorers[i].node_id = 0;
+    }
+
+    /* Clear objectives */
+    for (int i = 0; i < TERRAIN_MAX_OBJECTIVES; i++) {
+        g_state.terrain.objectives[i].x = 0;
+        g_state.terrain.objectives[i].y = 0;
+        g_state.terrain.objectives[i].type = 0;
+        g_state.terrain.objectives[i].status = 0;
+    }
+
+    /* Clear threats */
+    for (int i = 0; i < TERRAIN_MAX_THREATS; i++) {
+        g_state.terrain.threats[i].x = 0;
+        g_state.terrain.threats[i].y = 0;
+        g_state.terrain.threats[i].threat_level = 0;
+    }
+
+    /* Reset statistics */
+    g_state.terrain.cells_explored = 0;
+    g_state.terrain.cells_generated = 0;
+    g_state.terrain.threats_reported = 0;
+    g_state.terrain.objectives_found = 0;
+    g_state.terrain.moves_made = 0;
+    g_state.terrain.reports_sent = 0;
+}
+
+/* Cell access helpers */
+static uint8_t terrain_get_type(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return TERRAIN_IMPASSABLE;
+    return g_state.terrain.grid[y][x].base & 0x07;
+}
+
+static uint8_t terrain_get_elevation(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return 0;
+    return (g_state.terrain.grid[y][x].base >> TERRAIN_ELEV_SHIFT) & 0x07;
+}
+
+static uint8_t terrain_get_cover(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return 0;
+    return (g_state.terrain.grid[y][x].base >> TERRAIN_COVER_SHIFT) & 0x03;
+}
+
+static uint8_t terrain_get_threat(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return THREAT_CRITICAL;
+    return (g_state.terrain.grid[y][x].meta >> TERRAIN_THREAT_SHIFT) & 0x07;
+}
+
+static uint8_t terrain_get_passability(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return PASS_BLOCKED;
+    return (g_state.terrain.grid[y][x].meta >> TERRAIN_PASS_SHIFT) & 0x03;
+}
+
+static uint8_t terrain_is_explored(uint8_t x, uint8_t y) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return 0;
+    return g_state.terrain.grid[y][x].meta & TERRAIN_EXPLORED;
+}
+
+static void terrain_set_threat(uint8_t x, uint8_t y, uint8_t level) {
+    if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) return;
+    g_state.terrain.grid[y][x].meta =
+        (g_state.terrain.grid[y][x].meta & ~TERRAIN_THREAT_MASK) |
+        ((level & 0x07) << TERRAIN_THREAT_SHIFT);
+}
+
+/* Calculate movement cost to cell */
+static uint8_t terrain_movement_cost(uint8_t x, uint8_t y) {
+    uint8_t pass = terrain_get_passability(x, y);
+    switch (pass) {
+        case PASS_BLOCKED:   return 255;
+        case PASS_DIFFICULT: return 3;
+        case PASS_SLOW:      return 2;
+        default:             return 1;
+    }
+}
+
+/* Calculate visibility range from position (elevation bonus) */
+static uint8_t terrain_visibility_range(uint8_t x, uint8_t y, uint8_t base_range) {
+    uint8_t elevation = terrain_get_elevation(x, y);
+    return base_range + (elevation / 2);
+}
+
+/* Check if another explorer is at position */
+static bool terrain_explorer_at(uint8_t x, uint8_t y) {
+    for (int i = 0; i < TERRAIN_MAX_EXPLORERS; i++) {
+        if (g_state.terrain.explorers[i].node_id != 0 &&
+            g_state.terrain.explorers[i].node_id != g_state.node_id &&
+            g_state.terrain.explorers[i].x == x &&
+            g_state.terrain.explorers[i].y == y &&
+            ticks - g_state.terrain.explorers[i].last_seen < 200) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Perform sensor scan - generate and reveal cells in range */
+static void terrain_sensor_scan(void) {
+    uint8_t cx = g_state.terrain.pos_x;
+    uint8_t cy = g_state.terrain.pos_y;
+    uint8_t range = terrain_visibility_range(cx, cy, g_state.terrain.sensor_range);
+
+    /* Scan cells within range */
+    for (int dy = -(int)range; dy <= (int)range; dy++) {
+        for (int dx = -(int)range; dx <= (int)range; dx++) {
+            int nx = cx + dx;
+            int ny = cy + dy;
+
+            if (nx < 0 || nx >= TERRAIN_SIZE || ny < 0 || ny >= TERRAIN_SIZE) continue;
+
+            /* Manhattan distance check */
+            int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+            if (dist > range) continue;
+
+            /* Generate cell if not yet generated */
+            if (!terrain_is_explored(nx, ny)) {
+                terrain_generate_cell(nx, ny);
+                g_state.terrain.cells_explored++;
+            }
+        }
+    }
+}
+
+/* Score a potential move */
+static int terrain_score_move(uint8_t nx, uint8_t ny) {
+    int score = 0;
+
+    /* Check passability first */
+    uint8_t pass = terrain_get_passability(nx, ny);
+    if (pass == PASS_BLOCKED) return -10000;
+
+    /* Unexplored cells are valuable */
+    if (!terrain_is_explored(nx, ny)) {
+        score += 100;
+    }
+
+    /* Movement cost penalty */
+    score -= terrain_movement_cost(nx, ny) * 15;
+
+    /* Threat avoidance */
+    uint8_t threat = terrain_get_threat(nx, ny);
+    if (threat > THREAT_UNKNOWN) {
+        score -= threat * 40;
+    }
+
+    /* Cover bonus */
+    score += terrain_get_cover(nx, ny) * 8;
+
+    /* Elevation bonus for scouts */
+    if (g_state.role == ROLE_EXPLORER) {
+        score += terrain_get_elevation(nx, ny) * 5;
+    }
+
+    /* Terrain type preferences by role */
+    uint8_t ttype = terrain_get_type(nx, ny);
+    if (g_state.role == ROLE_WORKER && ttype == TERRAIN_ROAD) {
+        score += 15;  /* Workers prefer roads for fast travel */
+    } else if (g_state.role == ROLE_EXPLORER && ttype == TERRAIN_FOREST) {
+        score += 10;  /* Scouts prefer forest for concealment */
+    } else if (g_state.role == ROLE_SENTINEL &&
+               (ttype == TERRAIN_URBAN || ttype == TERRAIN_ROCKY)) {
+        score += 12;  /* Sentinels prefer urban/rocky for vantage */
+    }
+
+    /* Objective direction bonus */
+    if (g_state.terrain.has_objective) {
+        int obj_dx = (int)g_state.terrain.objective_x - (int)nx;
+        int obj_dy = (int)g_state.terrain.objective_y - (int)ny;
+        int obj_dist = (obj_dx < 0 ? -obj_dx : obj_dx) + (obj_dy < 0 ? -obj_dy : obj_dy);
+        score -= obj_dist * 2;
+    }
+
+    /* Avoid other explorers */
+    if (terrain_explorer_at(nx, ny)) {
+        score -= 60;
+    }
+
+    /* Randomness to avoid deadlocks */
+    score += (random() % 20);
+
+    return score;
+}
+
+/* Choose next movement direction (8-way) */
+static int terrain_choose_direction(void) {
+    uint8_t x = g_state.terrain.pos_x;
+    uint8_t y = g_state.terrain.pos_y;
+
+    int best_dir = -1;
+    int best_score = -10000;
+
+    for (int dir = 0; dir < 8; dir++) {
+        int nx = x + terrain_dx[dir];
+        int ny = y + terrain_dy[dir];
+
+        if (nx < 0 || nx >= TERRAIN_SIZE || ny < 0 || ny >= TERRAIN_SIZE) continue;
+
+        int score = terrain_score_move(nx, ny);
+
+        /* Penalize backtracking unless stuck */
+        if (g_state.terrain.path_len > 0 && g_state.terrain.stuck_count < 3) {
+            if (g_state.terrain.path[g_state.terrain.path_len - 1].x == (uint8_t)nx &&
+                g_state.terrain.path[g_state.terrain.path_len - 1].y == (uint8_t)ny) {
+                score -= 50;
+            }
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best_dir = dir;
+        }
+    }
+
+    return best_dir;
+}
+
+/* Execute terrain movement */
+static void terrain_move(void) {
+    if (!g_state.terrain.active) return;
+    if (ticks - g_state.terrain.last_move < TERRAIN_MOVE_INTERVAL) return;
+
+    g_state.terrain.last_move = ticks;
+
+    /* Perform sensor scan first */
+    terrain_sensor_scan();
+
+    /* Check if at objective */
+    if (g_state.terrain.has_objective &&
+        g_state.terrain.pos_x == g_state.terrain.objective_x &&
+        g_state.terrain.pos_y == g_state.terrain.objective_y) {
+        g_state.terrain.has_objective = 0;
+        serial_puts("[TERRAIN] Objective reached!\n");
+    }
+
+    /* Choose direction */
+    int dir = terrain_choose_direction();
+
+    if (dir < 0) {
+        /* Stuck - backtrack */
+        g_state.terrain.stuck_count++;
+        if (g_state.terrain.path_len > 0) {
+            g_state.terrain.path_len--;
+            g_state.terrain.pos_x = g_state.terrain.path[g_state.terrain.path_len].x;
+            g_state.terrain.pos_y = g_state.terrain.path[g_state.terrain.path_len].y;
+        }
+        return;
+    }
+
+    g_state.terrain.stuck_count = 0;
+
+    /* Record current position in path */
+    if (g_state.terrain.path_len < TERRAIN_PATH_LEN) {
+        g_state.terrain.path[g_state.terrain.path_len].x = g_state.terrain.pos_x;
+        g_state.terrain.path[g_state.terrain.path_len].y = g_state.terrain.pos_y;
+        g_state.terrain.path_len++;
+    }
+
+    /* Move to new position */
+    g_state.terrain.pos_x += terrain_dx[dir];
+    g_state.terrain.pos_y += terrain_dy[dir];
+    g_state.terrain.heading = dir;
+    g_state.terrain.moves_made++;
+}
+
+/* Share terrain discoveries with swarm */
+static void terrain_share_discoveries(void) {
+    if (!g_state.terrain.active) return;
+    if (ticks - g_state.terrain.last_share < TERRAIN_SHARE_INTERVAL) return;
+
+    g_state.terrain.last_share = ticks;
+
+    /* Send position update (TERRAIN_MOVE) */
+    struct nanos_pheromone pkt;
+    pkt.magic = NANOS_MAGIC;
+    pkt.node_id = g_state.node_id;
+    pkt.type = PHEROMONE_TERRAIN_MOVE;
+    pkt.ttl = 4;
+    pkt.flags = 0;
+    pkt.version = NANOS_VERSION;
+    pkt.seq = g_state.seq_counter++;
+    pkt.dest_id = 0;
+    pkt.distance = g_state.distance_to_queen;
+    pkt.hop_count = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
+
+    /* Build payload */
+    pkt.payload[0] = g_state.terrain.pos_x;
+    pkt.payload[1] = g_state.terrain.pos_y;
+    pkt.payload[2] = g_state.terrain.heading;
+    pkt.payload[3] = g_state.role;
+    pkt.payload[4] = g_state.terrain.sensor_range;
+    pkt.payload[5] = g_state.terrain.mode;
+    pkt.payload[6] = g_state.terrain.cells_explored & 0xFF;
+    pkt.payload[7] = (g_state.terrain.cells_explored >> 8) & 0xFF;
+
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    e1000_send(&pkt, sizeof(pkt));
+    g_state.packets_tx++;
+    g_state.terrain.reports_sent++;
+
+    /* Send cell reports (up to 4 cells) */
+    pkt.type = PHEROMONE_TERRAIN_REPORT;
+    pkt.seq = g_state.seq_counter++;
+
+    int cells_packed = 0;
+    uint8_t cx = g_state.terrain.pos_x;
+    uint8_t cy = g_state.terrain.pos_y;
+
+    /* Pack recently explored cells around current position */
+    for (int dy = -2; dy <= 2 && cells_packed < 4; dy++) {
+        for (int dx = -2; dx <= 2 && cells_packed < 4; dx++) {
+            int nx = cx + dx;
+            int ny = cy + dy;
+
+            if (nx < 0 || nx >= TERRAIN_SIZE || ny < 0 || ny >= TERRAIN_SIZE) continue;
+            if (!terrain_is_explored(nx, ny)) continue;
+
+            int offset = 1 + cells_packed * 6;
+            pkt.payload[offset + 0] = nx;
+            pkt.payload[offset + 1] = ny;
+            pkt.payload[offset + 2] = g_state.terrain.grid[ny][nx].base;
+            pkt.payload[offset + 3] = g_state.terrain.grid[ny][nx].meta;
+            pkt.payload[offset + 4] = 80;  /* Confidence */
+            pkt.payload[offset + 5] = 0;   /* Reserved */
+            cells_packed++;
+        }
+    }
+
+    if (cells_packed > 0) {
+        pkt.payload[0] = cells_packed;
+        e1000_send(&pkt, sizeof(pkt));
+        g_state.packets_tx++;
+    }
+}
+
+/* Process terrain initialization from dashboard */
+static void terrain_process_init(struct nanos_pheromone* pkt) {
+    /* Payload:
+     * [0-3]: seed
+     * [4]: difficulty
+     * [5]: start_x
+     * [6]: start_y
+     * [7]: terrain_bias (unused for now)
+     */
+    terrain_init();
+
+    g_state.terrain.seed = *(uint32_t*)(pkt->payload);
+    g_state.terrain.start_x = pkt->payload[5] % TERRAIN_SIZE;
+    g_state.terrain.start_y = pkt->payload[6] % TERRAIN_SIZE;
+    g_state.terrain.pos_x = g_state.terrain.start_x;
+    g_state.terrain.pos_y = g_state.terrain.start_y;
+    g_state.terrain.active = 1;
+    g_state.terrain.mode = TERRAIN_MODE_EXPLORE;
+
+    /* Generate starting area */
+    terrain_sensor_scan();
+
+    vga_set_color(0x0E);
+    vga_puts(">> TERRAIN EXPLORATION: seed=");
+    vga_put_hex(g_state.terrain.seed);
+    vga_puts(" pos=");
+    vga_put_dec(g_state.terrain.pos_x);
+    vga_puts(",");
+    vga_put_dec(g_state.terrain.pos_y);
+    vga_puts("\n");
+    vga_set_color(0x0A);
+
+    serial_puts("[TERRAIN] Started exploration seed=");
+    serial_put_hex(g_state.terrain.seed);
+    serial_puts(" pos=");
+    serial_put_dec(g_state.terrain.pos_x);
+    serial_puts(",");
+    serial_put_dec(g_state.terrain.pos_y);
+    serial_puts("\n");
+
+    /* Relay */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process terrain report from another node */
+static void terrain_process_report(struct nanos_pheromone* pkt) {
+    if (!g_state.terrain.active) return;
+
+    int count = pkt->payload[0];
+    if (count > 4) count = 4;
+
+    for (int i = 0; i < count; i++) {
+        int offset = 1 + i * 6;
+        uint8_t x = pkt->payload[offset + 0];
+        uint8_t y = pkt->payload[offset + 1];
+        uint8_t base = pkt->payload[offset + 2];
+        uint8_t meta = pkt->payload[offset + 3];
+
+        if (x >= TERRAIN_SIZE || y >= TERRAIN_SIZE) continue;
+
+        /* Only update if we haven't explored this cell */
+        if (!terrain_is_explored(x, y)) {
+            g_state.terrain.grid[y][x].base = base;
+            g_state.terrain.grid[y][x].meta = meta;
+        } else {
+            /* Merge threat info - take higher level */
+            uint8_t their_threat = (meta >> TERRAIN_THREAT_SHIFT) & 0x07;
+            uint8_t our_threat = terrain_get_threat(x, y);
+            if (their_threat > our_threat) {
+                terrain_set_threat(x, y, their_threat);
+            }
+        }
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process move update from another explorer */
+static void terrain_process_move(struct nanos_pheromone* pkt) {
+    if (!g_state.terrain.active) return;
+
+    uint32_t sender = pkt->node_id;
+    uint8_t x = pkt->payload[0];
+    uint8_t y = pkt->payload[1];
+    uint8_t heading = pkt->payload[2];
+    uint8_t role = pkt->payload[3];
+    uint8_t sensor_range = pkt->payload[4];
+    uint16_t cells = pkt->payload[6] | (pkt->payload[7] << 8);
+
+    /* Update explorer tracking */
+    int slot = -1;
+    for (int i = 0; i < TERRAIN_MAX_EXPLORERS; i++) {
+        if (g_state.terrain.explorers[i].node_id == sender) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 && g_state.terrain.explorers[i].node_id == 0) {
+            slot = i;
+        }
+    }
+
+    if (slot >= 0) {
+        g_state.terrain.explorers[slot].node_id = sender;
+        g_state.terrain.explorers[slot].x = x;
+        g_state.terrain.explorers[slot].y = y;
+        g_state.terrain.explorers[slot].role = role;
+        g_state.terrain.explorers[slot].sensor_range = sensor_range;
+        g_state.terrain.explorers[slot].heading = heading;
+        g_state.terrain.explorers[slot].last_seen = ticks;
+        g_state.terrain.explorers[slot].cells_explored = cells;
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process threat report */
+static void terrain_process_threat(struct nanos_pheromone* pkt) {
+    uint8_t x = pkt->payload[0];
+    uint8_t y = pkt->payload[1];
+    uint8_t level = pkt->payload[2];
+
+    if (x < TERRAIN_SIZE && y < TERRAIN_SIZE) {
+        uint8_t current = terrain_get_threat(x, y);
+        if (level > current) {
+            terrain_set_threat(x, y, level);
+        }
+    }
+
+    /* Log if significant */
+    if (level >= THREAT_DETECTED) {
+        serial_puts("[TERRAIN] Threat Lv");
+        serial_put_dec(level);
+        serial_puts(" at ");
+        serial_put_dec(x);
+        serial_puts(",");
+        serial_put_dec(y);
+        serial_puts("\n");
+    }
+
+    /* Relay with high priority */
+    if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Process strategy command */
+static void terrain_process_strategy(struct nanos_pheromone* pkt) {
+    if (!g_state.terrain.active) return;
+
+    uint8_t cmd = pkt->payload[0];
+    uint8_t target_x = pkt->payload[1];
+    uint8_t target_y = pkt->payload[2];
+
+    switch (cmd) {
+        case STRATEGY_REGROUP:
+            g_state.terrain.objective_x = target_x % TERRAIN_SIZE;
+            g_state.terrain.objective_y = target_y % TERRAIN_SIZE;
+            g_state.terrain.has_objective = 1;
+            g_state.terrain.mode = TERRAIN_MODE_REGROUP;
+            serial_puts("[TERRAIN] REGROUP to ");
+            serial_put_dec(target_x);
+            serial_puts(",");
+            serial_put_dec(target_y);
+            serial_puts("\n");
+            break;
+
+        case STRATEGY_SPREAD:
+            g_state.terrain.has_objective = 0;
+            g_state.terrain.mode = TERRAIN_MODE_EXPLORE;
+            serial_puts("[TERRAIN] SPREAD - free exploration\n");
+            break;
+
+        case STRATEGY_RETREAT:
+            g_state.terrain.objective_x = target_x % TERRAIN_SIZE;
+            g_state.terrain.objective_y = target_y % TERRAIN_SIZE;
+            g_state.terrain.has_objective = 1;
+            g_state.terrain.mode = TERRAIN_MODE_RETREAT;
+            serial_puts("[TERRAIN] RETREAT to ");
+            serial_put_dec(target_x);
+            serial_puts(",");
+            serial_put_dec(target_y);
+            serial_puts("\n");
+            break;
+
+        case STRATEGY_ADVANCE:
+            g_state.terrain.objective_x = target_x % TERRAIN_SIZE;
+            g_state.terrain.objective_y = target_y % TERRAIN_SIZE;
+            g_state.terrain.has_objective = 1;
+            g_state.terrain.mode = TERRAIN_MODE_ADVANCE;
+            serial_puts("[TERRAIN] ADVANCE to ");
+            serial_put_dec(target_x);
+            serial_puts(",");
+            serial_put_dec(target_y);
+            serial_puts("\n");
+            break;
+
+        default:
+            break;
+    }
+
+    /* Relay */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/* Integrate tactical DETECT events into terrain threat map */
+static void terrain_integrate_detections(void) {
+    if (!g_state.terrain.active) return;
+
+    /* Scale factor: map tactical coordinates to 32x32 grid */
+    /* Assume tactical positions are in mm, world is ~3200m square */
+    #define WORLD_SIZE_MM   3200000
+    #define COORD_TO_GRID(c) (((c) + WORLD_SIZE_MM/2) / (WORLD_SIZE_MM / TERRAIN_SIZE))
+
+    for (int i = 0; i < g_state.tactical.event_count; i++) {
+        if (g_state.tactical.events[i].alert_level == 0) continue;
+
+        /* Convert position to grid coordinates */
+        int32_t ex = g_state.tactical.events[i].est_pos_x;
+        int32_t ey = g_state.tactical.events[i].est_pos_y;
+
+        int gx = COORD_TO_GRID(ex);
+        int gy = COORD_TO_GRID(ey);
+
+        if (gx < 0 || gx >= TERRAIN_SIZE || gy < 0 || gy >= TERRAIN_SIZE) continue;
+
+        /* Map alert level to threat level */
+        uint8_t threat = THREAT_SUSPECTED;
+        uint8_t alert = g_state.tactical.events[i].alert_level;
+        if (alert >= 4) threat = THREAT_CRITICAL;
+        else if (alert >= 3) threat = THREAT_ACTIVE;
+        else if (alert >= 2) threat = THREAT_CONFIRMED;
+        else if (alert >= 1) threat = THREAT_DETECTED;
+
+        /* Update if new threat is higher */
+        uint8_t current = terrain_get_threat(gx, gy);
+        if (threat > current) {
+            terrain_set_threat(gx, gy, threat);
+
+            /* Also track in threats array for dashboard */
+            int slot = -1;
+            for (int t = 0; t < TERRAIN_MAX_THREATS; t++) {
+                if (g_state.terrain.threats[t].x == gx &&
+                    g_state.terrain.threats[t].y == gy) {
+                    slot = t;
+                    break;
+                }
+                if (slot < 0 && g_state.terrain.threats[t].threat_level == 0) {
+                    slot = t;
+                }
+            }
+            if (slot >= 0) {
+                g_state.terrain.threats[slot].x = gx;
+                g_state.terrain.threats[slot].y = gy;
+                g_state.terrain.threats[slot].threat_level = threat;
+                g_state.terrain.threats[slot].detect_types =
+                    g_state.tactical.events[i].detect_types;
+                g_state.terrain.threats[slot].confidence =
+                    g_state.tactical.events[i].reporter_count * 25;
+                g_state.terrain.threats[slot].last_updated = ticks;
+                if (g_state.terrain.threats[slot].first_seen == 0) {
+                    g_state.terrain.threats[slot].first_seen = ticks;
+                }
+            }
+
+            serial_puts("[TERRAIN] Threat from DETECT at ");
+            serial_put_dec(gx);
+            serial_puts(",");
+            serial_put_dec(gy);
+            serial_puts(" level=");
+            serial_put_dec(threat);
+            serial_puts("\n");
+        }
+    }
+
+    #undef WORLD_SIZE_MM
+    #undef COORD_TO_GRID
 }
 
 /* ==========================================================================
@@ -1814,6 +3413,7 @@ void cell_apoptosis(void) {
     g_state.known_queen_id = 0;
     g_state.last_queen_seen = 0;
     g_state.election.participating = 0;
+    g_state.election.last_ended = 0;
 
     /* Clear neighbor and route tables */
     for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
@@ -1846,6 +3446,13 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 
     /* Don't process our own messages */
     if (pkt->node_id == g_state.node_id) return;
+
+    /* Bloom filter deduplication - O(1) check */
+    if (!bloom_check_and_add(pkt)) {
+        /* Already seen this packet - skip processing */
+        g_state.packets_dropped++;
+        return;
+    }
 
     /* Security check for critical messages */
     if (is_authenticated_type(pkt->type)) {
@@ -1972,8 +3579,9 @@ void process_pheromone(struct nanos_pheromone* pkt) {
                 g_state.distance_to_queen = pkt->hop_count + 1;
                 g_state.gradient_via = pkt->node_id;
 
-                /* Cancel any ongoing election */
+                /* Cancel any ongoing election and start cooldown */
                 g_state.election.participating = 0;
+                g_state.election.last_ended = ticks;  /* Cooldown to prevent immediate re-election */
                 if (g_state.role == ROLE_CANDIDATE) {
                     g_state.role = g_state.previous_role;
                 }
@@ -2083,6 +3691,53 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 
         case PHEROMONE_JOB_RESULT:
             process_job_result(pkt);
+            break;
+
+        /* Tactical Intelligence pheromones */
+        case PHEROMONE_DETECT:
+            tactical_process_detection(pkt);
+            if (pkt->ttl > 0 && gossip_should_relay(pkt)) {
+                pkt->ttl--;
+                e1000_send(pkt, sizeof(*pkt));
+            }
+            break;
+
+        /* Maze Exploration pheromones */
+        case PHEROMONE_MAZE_INIT:
+            maze_process_init(pkt);
+            break;
+
+        case PHEROMONE_MAZE_DISCOVER:
+            maze_process_discover(pkt);
+            break;
+
+        case PHEROMONE_MAZE_MOVE:
+            maze_process_move(pkt);
+            break;
+
+        case PHEROMONE_MAZE_SOLVED:
+            maze_process_solved(pkt);
+            break;
+
+        /* Terrain Exploration pheromones */
+        case PHEROMONE_TERRAIN_INIT:
+            terrain_process_init(pkt);
+            break;
+
+        case PHEROMONE_TERRAIN_REPORT:
+            terrain_process_report(pkt);
+            break;
+
+        case PHEROMONE_TERRAIN_MOVE:
+            terrain_process_move(pkt);
+            break;
+
+        case PHEROMONE_TERRAIN_THREAT:
+            terrain_process_threat(pkt);
+            break;
+
+        case PHEROMONE_TERRAIN_STRATEGY:
+            terrain_process_strategy(pkt);
             break;
 
         default:
@@ -2206,16 +3861,31 @@ void nanos_loop(void) {
             emit_heartbeat();
         }
 
-        /* Sensor network - generate readings periodically */
+        /* Sensor network - DISABLED (spams logs)
         if (ticks - g_state.last_sensor_reading >= SENSOR_INTERVAL) {
             sensor_generate();
         }
-
-        /* Queens aggregate sensor data periodically */
         if (g_state.role == ROLE_QUEEN &&
             ticks - g_state.last_aggregate >= AGGREGATE_INTERVAL) {
             sensor_aggregate();
         }
+        */
+
+        /* Tactical intelligence - DISABLED (spams logs)
+        if (g_state.role == ROLE_SENTINEL) {
+            tactical_simulate();
+        }
+        tactical_maintenance();
+        */
+
+        /* Maze exploration - move and share discoveries */
+        maze_move();
+        maze_share_discoveries();
+
+        /* Terrain exploration - move and share discoveries */
+        terrain_move();
+        terrain_share_discoveries();
+        terrain_integrate_detections();
 
         /* Process any pending compute job chunks */
         job_process_chunk();
@@ -2241,7 +3911,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     /* Banner */
     vga_set_color(0x0B);  /* Cyan */
     vga_puts("========================================\n");
-    vga_puts("  NanOS v0.3 - Collective Intelligence\n");
+    vga_puts("  NanOS v0.4 - Swarm Exploration\n");
     vga_puts("========================================\n\n");
     vga_set_color(0x0A);
 
@@ -2251,7 +3921,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
 
     vga_puts("[*] Initializing serial (COM1)...\n");
     serial_init();
-    serial_puts("\n=== NanOS v0.3 Boot ===\n");
+    serial_puts("\n=== NanOS v0.4 Boot ===\n");
 
     vga_puts("[*] Initializing interrupts...\n");
     pic_init();
@@ -2325,17 +3995,34 @@ void kernel_main(uint32_t magic, void* mb_info) {
     }
     g_state.election.participating = 0;
     g_state.election.phase = ELECTION_PHASE_NONE;
+    g_state.election.last_ended = 0;
 
     /* Clear gossip cache */
     for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
         g_state.gossip_cache[i].hash = 0;
     }
 
+    /* Initialize bloom filter for O(1) deduplication */
+    bloom_init();
+
+    /* Initialize tactical intelligence system */
+    tactical_init();
+
+    /* Initialize maze exploration */
+    maze_init();
+
+    /* Initialize terrain exploration */
+    terrain_init();
+
     vga_puts("\n[*] Cell alive. Features:\n");
     vga_puts("    - Quorum sensing\n");
     vga_puts("    - Queen elections\n");
     vga_puts("    - Gradient routing\n");
     vga_puts("    - HMAC authentication\n");
+    vga_puts("    - Bloom filter dedup\n");
+    vga_puts("    - Tactical correlation\n");
+    vga_puts("    - Maze exploration\n");
+    vga_puts("    - Terrain exploration\n");
     vga_puts("    - Apoptosis at ");
     vga_put_dec(HEAP_CRITICAL_PCT);
     vga_puts("% heap or ");

@@ -6,7 +6,10 @@
       "Bash(wsl -e bash -c:*)",
       "Bash(wsl -d Ubuntu -- bash -c \"cd /mnt/c/Users/sotom/nanOs && make clean && make 2>&1\":*)",
       "Bash(wsl -d Ubuntu -- bash -c \"cat /tmp/nanos_node_1.log 2>/dev/null | grep METRICS | head -5\":*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(wsl:*)",
+      "Bash(python:*)",
+      "Bash(where:*)"
     ]
   }
 }
