@@ -246,15 +246,24 @@ int nert_security_initiate_rekey(uint32_t new_epoch) {
                                       &request, sizeof(request));
 
     if (result == 0) {
-        /* Step 7: Pre-compute next session key for the new epoch
-         * This allows us to accept messages encrypted with the new key
-         * immediately after the grace period
+        /* Step 7: USE THE NEW SEED AS OUR NEXT SESSION KEY
+         *
+         * CRITICAL FIX: We must use the same new_seed that we just sent
+         * to the swarm. Don't call derive_session_key() which uses the
+         * static master key - that defeats forward secrecy!
          */
-        derive_session_key(new_epoch);
 
-        /* Optionally: Set a timer to fully switch to new key after grace period
-         * For now, the grace window mechanism handles this automatically
-         */
+        /* Copy our newly generated seed to next_session_key */
+        memcpy(next_session_key, new_seed, NERT_KEY_SIZE);
+
+        /* Update epoch tracking */
+        last_key_epoch = new_epoch;
+
+        /* For security: wipe the seed from stack memory */
+        volatile uint8_t *p = (volatile uint8_t *)new_seed;
+        for (int i = 0; i < 32; i++) {
+            p[i] = 0;
+        }
     }
 
     return result;
@@ -309,10 +318,27 @@ int nert_security_handle_rekey(const struct nert_rekey_request *request) {
     uint8_t decrypted_seed[32];
     chacha8_encrypt(session_key, nonce, request->encrypted_seed, 32, decrypted_seed);
 
-    /* Step 3: Derive new session keys for the new epoch
-     * This updates session_key, prev_session_key, and next_session_key
+    /* Step 3: USE THE DECRYPTED SEED AS THE NEW KEY
+     *
+     * CRITICAL FIX: The original code called derive_session_key() which
+     * uses the static swarm_master_key. This defeats forward secrecy!
+     *
+     * Instead, we directly use the decrypted seed as the new session key.
+     * This ensures that compromising the master key doesn't allow
+     * predicting future keys.
      */
-    derive_session_key(request->new_epoch);
+
+    /* Copy the new seed directly to next_session_key */
+    memcpy(next_session_key, decrypted_seed, NERT_KEY_SIZE);
+
+    /* Update epoch tracking */
+    last_key_epoch = request->new_epoch;
+
+    /* For security: wipe the seed from stack memory */
+    volatile uint8_t *p = (volatile uint8_t *)decrypted_seed;
+    for (int i = 0; i < 32; i++) {
+        p[i] = 0;
+    }
 
     /* Step 4: Send acknowledgment (optional)
      * Format: epoch (4 bytes) + node_id (2 bytes)
