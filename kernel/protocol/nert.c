@@ -10,6 +10,18 @@
 #include "nert.h"
 #include <string.h>
 
+/* Pheromone type definitions (normally from nanos.h)  */
+#ifndef PHEROMONE_ECHO
+#define PHEROMONE_ECHO      0x04
+#endif
+
+/* Neighbor table structure (for multipath routing) */
+struct neighbor_entry {
+    uint32_t node_id;
+    uint8_t  distance;
+    uint16_t packets;
+};
+
 /* ============================================================================
  * Internal State
  * ============================================================================ */
@@ -725,11 +737,7 @@ static int fec_decode(uint8_t shards[6][NERT_FEC_SHARD_SIZE],
 #if NERT_ENABLE_MULTIPATH
 
 extern uint8_t neighbor_count;
-extern struct neighbor_entry {
-    uint32_t node_id;
-    uint8_t  distance;
-    uint16_t packets;
-} neighbors[];
+extern struct neighbor_entry neighbors[];
 
 static int select_paths(uint16_t dest_id, uint16_t paths[NERT_MAX_PATHS]) {
     int path_count = 0;
