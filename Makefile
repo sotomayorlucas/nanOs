@@ -33,6 +33,8 @@ ifeq ($(ARCH),x86)
     C_SRC   := kernel/kernel.c kernel/collective.c \
                 kernel/memory/allocator.c \
                 kernel/protocol/bloom.c kernel/protocol/gossip.c kernel/protocol/hmac.c \
+                kernel/tactical/intelligence.c kernel/tactical/maze.c kernel/tactical/terrain.c \
+                kernel/workloads/global_compute.c \
                 arch/x86/console_vga.c arch/x86/serial_com.c \
                 drivers/e1000_minimal.c arch/x86/hal_x86.c
 
@@ -70,8 +72,34 @@ else ifeq ($(ARCH),arm64)
                       -device virtio-net-device,netdev=net0 \
                       -netdev socket,id=net0,mcast=230.0.0.1:1234
 
+else ifeq ($(ARCH),arm-qemu)
+    # ARM Cortex-M3 for QEMU (lm3s6965evb)
+    CROSS   := arm-none-eabi-
+    CC      := $(CROSS)gcc
+    AS      := $(CROSS)as
+    LD      := $(CROSS)ld
+    OBJCOPY := $(CROSS)objcopy
+    QEMU    := qemu-system-arm
+
+    CFLAGS  := -mcpu=cortex-m3 -mthumb -ffreestanding -fno-stack-protector \
+               -nostdlib -Wall -Wextra -O2 -std=c99 -I include \
+               -DARCH_ARM_CORTEX_M3 -DPLATFORM_QEMU_LM3S
+    LDFLAGS := -T arch/arm-qemu/linker.ld -nostdlib
+
+    KERNEL  := nanos-arm.elf
+    IMAGE   := nanos-arm.bin
+
+    C_SRC   := arch/arm-qemu/startup.c arch/arm-qemu/nanos_arm.c \
+               arch/arm-qemu/maze_arm.c arch/arm-qemu/terrain_arm.c
+
+    QEMU_OPTS := -M lm3s6965evb -nographic
+    # Swarm con multicast UDP
+    QEMU_NET_SWARM := -M lm3s6965evb -nographic \
+                      -netdev socket,id=net0,mcast=230.0.0.1:1234 \
+                      -net nic,netdev=net0,model=stellaris
+
 else
-    $(error Unknown architecture: $(ARCH). Use ARCH=x86 or ARCH=arm64)
+    $(error Unknown architecture: $(ARCH). Use ARCH=x86, ARCH=arm64, or ARCH=arm-qemu)
 endif
 
 # =============================================================================
@@ -88,7 +116,7 @@ OBJECTS := $(ASM_OBJ) $(C_OBJ)
 # =============================================================================
 # Targets
 # =============================================================================
-.PHONY: all clean run run-elf swarm swarm3 swarm5 swarm10 debug help x86 arm64 dashboard
+.PHONY: all clean run run-elf run-arm swarm swarm3 swarm5 swarm10 swarm-arm swarm-arm3 swarm-arm5 debug help x86 arm64 arm-qemu dashboard
 
 all: $(KERNEL)
 	@echo "[OK] Built $(KERNEL) for $(ARCH)"
@@ -100,6 +128,15 @@ x86:
 arm64:
 	$(MAKE) ARCH=arm64 all
 
+arm-qemu:
+	$(MAKE) ARCH=arm-qemu all
+
+# Quick run for ARM QEMU (embedded simulation)
+run-arm:
+	$(MAKE) ARCH=arm-qemu all
+	@echo "[QEMU] Running NanOS ARM Cortex-M3..."
+	@qemu-system-arm -M lm3s6965evb -nographic -kernel nanos-arm.elf
+
 # =============================================================================
 # Build Rules
 # =============================================================================
@@ -107,6 +144,10 @@ $(KERNEL): $(OBJECTS)
 	@echo "[LD] Linking $@..."
 	@$(LD) $(LDFLAGS) -o $@ $^
 ifeq ($(ARCH),arm64)
+	@echo "[BIN] Creating binary image..."
+	@$(OBJCOPY) -O binary $@ $(IMAGE)
+endif
+ifeq ($(ARCH),arm-qemu)
 	@echo "[BIN] Creating binary image..."
 	@$(OBJCOPY) -O binary $@ $(IMAGE)
 endif
@@ -170,8 +211,9 @@ endif
 # =============================================================================
 # Swarm Mode (Multiple Nodes)
 # =============================================================================
-swarm: $(ISO)
+swarm:
 ifeq ($(ARCH),x86)
+	@$(MAKE) ARCH=x86 $(ISO)
 	@echo "[SWARM] Launching $(NODES) x86 nodes..."
 	@for i in $$(seq 1 $(NODES)); do \
 		mac=$$(printf "52:54:00:00:00:%02x" $$i); \
@@ -179,27 +221,58 @@ ifeq ($(ARCH),x86)
 			-serial file:/tmp/nanos_node_$$i.log & \
 		sleep 0.3; \
 	done
+	@echo "[SWARM] $(NODES) x86 nodes launched."
+	@echo "        Logs: /tmp/nanos_node_*.log"
+	@echo "        Stop: pkill qemu"
 else ifeq ($(ARCH),arm64)
+	@$(MAKE) ARCH=arm64 $(KERNEL)
 	@echo "[SWARM] Launching $(NODES) ARM64 nodes..."
 	@for i in $$(seq 1 $(NODES)); do \
 		mac=$$(printf "52:54:00:00:00:%02x" $$i); \
 		$(QEMU) -kernel $(KERNEL) $(QEMU_NET_SWARM),mac=$$mac & \
 		sleep 0.3; \
 	done
-endif
-	@echo "[SWARM] $(NODES) nodes launched."
-	@echo "        Logs: /tmp/nanos_node_*.log"
+	@echo "[SWARM] $(NODES) ARM64 nodes launched."
 	@echo "        Stop: pkill qemu"
+else ifeq ($(ARCH),arm-qemu)
+	@$(MAKE) ARCH=arm-qemu $(KERNEL)
+	@echo "[SWARM] Launching $(NODES) ARM Cortex-M3 nodes with network..."
+	@-pkill -f qemu-system-arm 2>/dev/null || true
+	@rm -f /tmp/nanos_arm_*.log
+	@for i in $$(seq 1 $(NODES)); do \
+		mac=$$(printf "52:54:00:00:00:%02x" $$i); \
+		qemu-system-arm -M lm3s6965evb -nographic \
+			-kernel nanos-arm.elf \
+			-net nic,macaddr=$$mac -net socket,mcast=230.0.0.1:1234 \
+			-serial file:/tmp/nanos_arm_$$i.log </dev/null >/dev/null 2>&1 & \
+		sleep 0.3; \
+	done
+	@echo ""
+	@echo "[SWARM] $(NODES) ARM nodes running with multicast network!"
+	@echo "        Logs: /tmp/nanos_arm_*.log"
+	@echo "        View: tail -f /tmp/nanos_arm_*.log"
+	@echo "        Stop: pkill qemu-system-arm"
+endif
 
-# Convenience swarm sizes
-swarm3: $(ISO)
-	@$(MAKE) swarm NODES=3
+# Convenience swarm sizes (x86 default)
+swarm3:
+	@$(MAKE) ARCH=x86 swarm NODES=3
 
-swarm5: $(ISO)
-	@$(MAKE) swarm NODES=5
+swarm5:
+	@$(MAKE) ARCH=x86 swarm NODES=5
 
-swarm10: $(ISO)
-	@$(MAKE) swarm NODES=10
+swarm10:
+	@$(MAKE) ARCH=x86 swarm NODES=10
+
+# ARM swarm convenience targets
+swarm-arm:
+	@$(MAKE) ARCH=arm-qemu swarm NODES=$(NODES)
+
+swarm-arm3:
+	@$(MAKE) ARCH=arm-qemu swarm NODES=3
+
+swarm-arm5:
+	@$(MAKE) ARCH=arm-qemu swarm NODES=5
 
 # =============================================================================
 # Debug Mode
@@ -239,49 +312,45 @@ help:
 	@echo "NanOS Multi-Architecture Build System"
 	@echo "======================================"
 	@echo ""
-	@echo "Usage: make [ARCH=x86|arm64] [NODES=n] <target>"
+	@echo "Usage: make [ARCH=x86|arm64|arm-qemu] [NODES=n] <target>"
 	@echo ""
 	@echo "Architectures:"
-	@echo "  ARCH=x86    - Intel/AMD 32-bit (default)"
-	@echo "  ARCH=arm64  - ARM 64-bit (AArch64)"
+	@echo "  ARCH=x86      - Intel/AMD 32-bit (default)"
+	@echo "  ARCH=arm64    - ARM 64-bit (AArch64)"
+	@echo "  ARCH=arm-qemu - ARM Cortex-M3 (embedded simulation)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  all         - Build kernel for selected arch"
 	@echo "  x86         - Build x86 kernel"
 	@echo "  arm64       - Build ARM64 kernel"
+	@echo "  arm-qemu    - Build ARM Cortex-M3 kernel"
 	@echo "  run         - Run in QEMU (single node)"
+	@echo "  run-arm     - Build and run ARM Cortex-M3"
 	@echo "  swarm       - Launch N-node swarm (default 3)"
-	@echo "  swarm3      - Launch 3-node swarm"
-	@echo "  swarm5      - Launch 5-node swarm"
-	@echo "  swarm10     - Launch 10-node swarm"
+	@echo "  swarm3/5/10 - Launch x86 swarm"
+	@echo "  swarm-arm   - Launch ARM Cortex-M3 swarm"
+	@echo "  swarm-arm3  - Launch 3-node ARM swarm"
+	@echo "  swarm-arm5  - Launch 5-node ARM swarm"
 	@echo "  dashboard   - Start web dashboard (http://localhost:8080)"
 	@echo "  debug       - Start with GDB debugging"
 	@echo "  clean       - Remove build artifacts"
 	@echo ""
-	@echo "In-Kernel Commands (press key in QEMU window):"
-	@echo "  s - Show swarm status"
-	@echo "  d - Send DATA message to swarm"
-	@echo "  a - Trigger ALARM propagation"
-	@echo "  e - Start queen election"
-	@echo "  q - Send QUEEN command (if queen)"
-	@echo "  h - Show help"
-	@echo "  r - Force rebirth (apoptosis)"
-	@echo ""
-	@echo "Workload Commands:"
-	@echo "  k - KV store demo (set/replicate)"
-	@echo "  t - Distribute task (queens only)"
-	@echo "  w - Show workload statistics"
-	@echo ""
 	@echo "Examples:"
 	@echo "  make                    # Build x86"
-	@echo "  make run                # Single node"
-	@echo "  make swarm              # 3-node swarm"
-	@echo "  make swarm NODES=7      # 7-node swarm"
-	@echo "  make dashboard          # Start web UI"
+	@echo "  make run                # Single x86 node"
+	@echo "  make swarm              # 3-node x86 swarm"
+	@echo "  make run-arm            # Single ARM node"
+	@echo "  make swarm-arm3         # 3-node ARM swarm"
+	@echo "  make swarm-arm NODES=5  # 5-node ARM swarm"
 	@echo ""
-	@echo "Logs: /tmp/nanos_node_*.log"
+	@echo "Logs:"
+	@echo "  x86: /tmp/nanos_node_*.log"
+	@echo "  ARM: /tmp/nanos_arm_*.log"
+	@echo ""
+	@echo "Stop swarm: pkill qemu"
 	@echo ""
 	@echo "Requirements:"
-	@echo "  x86:   gcc, nasm, qemu-system-i386, grub-pc-bin"
-	@echo "  arm64: aarch64-linux-gnu-gcc, qemu-system-aarch64"
+	@echo "  x86:      gcc, nasm, qemu-system-i386"
+	@echo "  arm64:    aarch64-linux-gnu-gcc, qemu-system-aarch64"
+	@echo "  arm-qemu: arm-none-eabi-gcc, qemu-system-arm"
 	@echo "  dashboard: python3"

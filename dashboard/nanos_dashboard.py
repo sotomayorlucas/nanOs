@@ -326,6 +326,69 @@ def send_pheromone(pkt):
     return False
 
 # ============================================================================
+# ARM Compact Packet Support (24-byte packets for ARM Cortex-M3 nodes)
+# ============================================================================
+
+ARM_MAGIC = 0xAA
+ARM_PKT_SIZE = 24
+
+def build_arm_pheromone(ptype, payload_data):
+    """Build a 24-byte ARM-compatible compact pheromone packet"""
+    # ARM packet structure:
+    # magic(1) + node_id(2) + type(1) + ttl_flags(1) + seq(1) + dest_id(2) +
+    # dist_hop(1) + payload(8) + hmac(4) + reserved(3) = 24 bytes
+    magic = ARM_MAGIC
+    node_id = 0xDA5B  # Dashboard ID (truncated)
+    ttl_flags = (15 << 4) | 0  # TTL=15, flags=0
+    seq = int(time.time()) & 0xFF
+    dest_id = 0x0000  # Broadcast
+    dist_hop = 0
+
+    # Pack header (9 bytes)
+    header = struct.pack('<BHBBHBB', magic, node_id, ptype, ttl_flags, seq, dest_id, dist_hop)
+
+    # Payload (8 bytes)
+    payload = payload_data[:8].ljust(8, b'\x00')
+
+    # HMAC (4 bytes) - zeros
+    hmac = b'\x00' * 4
+
+    # Reserved (3 bytes)
+    reserved = b'\x00' * 3
+
+    return header + payload + hmac + reserved
+
+def send_arm_pheromone(pkt):
+    """Send a 24-byte ARM pheromone packet to the swarm"""
+    eth_frame = build_eth_frame(pkt)
+    if udp_socket:
+        try:
+            udp_socket.sendto(eth_frame, (MULTICAST_GROUP, MULTICAST_PORT))
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to send ARM pheromone: {e}")
+            return False
+    return False
+
+def send_arm_maze_init(start_x=1, start_y=1, goal_x=14, goal_y=14):
+    """Send MAZE_INIT to ARM nodes"""
+    # ARM maze init payload: start_x(1), start_y(1), goal_x(1), goal_y(1)
+    payload = bytes([start_x, start_y, goal_x, goal_y, 0, 0, 0, 0])
+    pkt = build_arm_pheromone(PHEROMONE_MAZE_INIT, payload)
+    send_arm_pheromone(pkt)
+    print(f"[ARM] Sent MAZE_INIT start=({start_x},{start_y}) goal=({goal_x},{goal_y})")
+    return True
+
+def send_arm_terrain_init(start_x=16, start_y=16):
+    """Send TERRAIN_INIT to ARM nodes"""
+    # ARM terrain init payload: start_x(1), start_y(1)
+    payload = bytes([start_x, start_y, 0, 0, 0, 0, 0, 0])
+    pkt = build_arm_pheromone(PHEROMONE_TERRAIN_INIT, payload)
+    send_arm_pheromone(pkt)
+    print(f"[ARM] Sent TERRAIN_INIT start=({start_x},{start_y})")
+    return True
+
+# ============================================================================
 # Terrain Generation (mirrors kernel algorithm for dashboard visualization)
 # ============================================================================
 
@@ -515,7 +578,7 @@ def get_job_type_name(job_type):
     return names.get(job_type, f'Unknown ({job_type})')
 
 def parse_metrics_line(line):
-    """Parse a [METRICS] log line into a dict"""
+    """Parse a [METRICS] log line into a dict (x86 format)"""
     match = re.search(r'\[METRICS\]\s+t=(\d+)s\s+node=0x([0-9A-Fa-f]+)\s+role=(\w+)\s+neighbors=(\d+)\s+rx=(\d+)\s+tx=(\d+)\s+queen=0x([0-9A-Fa-f]+)\s+dist=(\d+)', line)
     if match:
         return {
@@ -527,7 +590,28 @@ def parse_metrics_line(line):
             'tx': int(match.group(6)),
             'queen_id': match.group(7).upper(),
             'distance': int(match.group(8)),
-            'last_seen': time.time()
+            'last_seen': time.time(),
+            'platform': 'x86'
+        }
+    return None
+
+def parse_arm_status_line(line):
+    """Parse a [STATUS] log line into a dict (ARM format)"""
+    # Format: [STATUS] Node 0x00000001 [EXPLORER] neighbors=2 rx=57 tx=30 ticks=3000
+    match = re.search(r'\[STATUS\]\s+Node\s+0x([0-9A-Fa-f]+)\s+\[(\w+)\]\s+neighbors=(\d+)\s+rx=(\d+)\s+tx=(\d+)\s+ticks=(\d+)', line)
+    if match:
+        ticks = int(match.group(6))
+        return {
+            'uptime': ticks // 100,  # Convert ticks to seconds (100 ticks/sec)
+            'node_id': match.group(1).upper(),
+            'role': match.group(2),
+            'neighbors': int(match.group(3)),
+            'rx': int(match.group(4)),
+            'tx': int(match.group(5)),
+            'queen_id': '00000000',
+            'distance': 15,
+            'last_seen': time.time(),
+            'platform': 'arm'
         }
     return None
 
@@ -584,7 +668,9 @@ def monitor_logs(log_dir):
 
     while True:
         try:
+            # Include both x86 and ARM log files
             log_files = glob.glob(os.path.join(log_dir, 'nanos_node_*.log'))
+            log_files += glob.glob(os.path.join(log_dir, 'nanos_arm_*.log'))
 
             for log_file in log_files:
                 try:
@@ -598,7 +684,10 @@ def monitor_logs(log_dir):
 
                     with state_lock:
                         for line in new_lines:
+                            # Try x86 format first, then ARM format
                             metrics = parse_metrics_line(line)
+                            if not metrics:
+                                metrics = parse_arm_status_line(line)
                             if metrics:
                                 swarm_state['nodes'][metrics['node_id']] = metrics
                                 swarm_state['last_update'] = time.time()
@@ -606,7 +695,7 @@ def monitor_logs(log_dir):
                                 # Track queen
                                 if metrics['role'] == 'QUEEN':
                                     swarm_state['queen_id'] = metrics['node_id']
-                                elif metrics['queen_id'] and metrics['queen_id'] != '00000000':
+                                elif metrics.get('queen_id') and metrics['queen_id'] != '00000000':
                                     swarm_state['queen_id'] = metrics['queen_id']
 
                             # Parse detection events
@@ -811,6 +900,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.handle_terrain_strategy(body)
         elif parsed.path == '/api/terrain/objective':
             self.handle_terrain_objective(body)
+        # ARM-specific endpoints
+        elif parsed.path == '/api/arm/maze/start':
+            self.handle_arm_maze_start(body)
+        elif parsed.path == '/api/arm/terrain/start':
+            self.handle_arm_terrain_start(body)
+        elif parsed.path == '/api/arm/kill':
+            self.handle_arm_kill()
         else:
             self.send_error(404)
 
@@ -1135,6 +1231,75 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_json_response({'success': True})
         except Exception as e:
             self.send_json_response({'success': False, 'error': str(e)}, 400)
+
+    def handle_arm_maze_start(self, body):
+        """Start maze exploration on ARM nodes"""
+        try:
+            data = json.loads(body) if body else {}
+            start_x = data.get('start_x', 1)
+            start_y = data.get('start_y', 1)
+            goal_x = data.get('goal_x', 14)
+            goal_y = data.get('goal_y', 14)
+
+            send_arm_maze_init(start_x, start_y, goal_x, goal_y)
+
+            with state_lock:
+                swarm_state['maze']['active'] = True
+                swarm_state['maze']['solved'] = False
+                swarm_state['maze']['started_at'] = time.time()
+                swarm_state['maze']['start'] = [start_x, start_y]
+                swarm_state['maze']['goal'] = [goal_x, goal_y]
+                swarm_state['events'].append({
+                    'time': datetime.now().strftime('%H:%M:%S'),
+                    'type': 'maze',
+                    'message': f'ARM Maze started: ({start_x},{start_y}) -> ({goal_x},{goal_y})'
+                })
+            self.send_json_response({'success': True})
+        except Exception as e:
+            self.send_json_response({'success': False, 'error': str(e)}, 400)
+
+    def handle_arm_terrain_start(self, body):
+        """Start terrain exploration on ARM nodes"""
+        try:
+            data = json.loads(body) if body else {}
+            start_x = data.get('start_x', 16)
+            start_y = data.get('start_y', 16)
+
+            send_arm_terrain_init(start_x, start_y)
+
+            with state_lock:
+                swarm_state['terrain']['active'] = True
+                swarm_state['terrain']['started_at'] = time.time()
+                swarm_state['events'].append({
+                    'time': datetime.now().strftime('%H:%M:%S'),
+                    'type': 'terrain',
+                    'message': f'ARM Terrain started at ({start_x},{start_y})'
+                })
+            self.send_json_response({'success': True})
+        except Exception as e:
+            self.send_json_response({'success': False, 'error': str(e)}, 400)
+
+    def handle_arm_kill(self):
+        """Kill all ARM QEMU nodes"""
+        import subprocess
+        try:
+            # Kill ARM QEMU processes
+            if os.name == 'nt':  # Windows
+                subprocess.run(['taskkill', '/F', '/IM', 'qemu-system-arm.exe'],
+                             capture_output=True, timeout=5)
+            else:  # Linux/Mac
+                subprocess.run(['pkill', '-f', 'qemu-system-arm'],
+                             capture_output=True, timeout=5)
+
+            with state_lock:
+                swarm_state['events'].append({
+                    'time': datetime.now().strftime('%H:%M:%S'),
+                    'type': 'alarm',
+                    'message': 'ARM swarm terminated'
+                })
+            self.send_json_response({'success': True, 'message': 'ARM swarm killed'})
+        except Exception as e:
+            self.send_json_response({'success': False, 'error': str(e)}, 500)
 
     def send_json_response(self, data, status=200):
         """Helper to send JSON response"""
@@ -1749,6 +1914,16 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
                 </div>
             </div>
 
+            <!-- ARM Control Panel -->
+            <div class="control-panel">
+                <h3>ARM SWARM CONTROL</h3>
+                <div class="control-grid">
+                    <button class="ctrl-btn" onclick="startArmMaze()" style="color:#00ffff;border-color:#00ffff">ARM Maze</button>
+                    <button class="ctrl-btn" onclick="startArmTerrain()" style="color:#ff8800;border-color:#ff8800">ARM Terrain</button>
+                    <button class="ctrl-btn danger" onclick="killArmSwarm()">KILL ARM</button>
+                </div>
+            </div>
+
             <!-- Job Submission -->
             <div class="job-panel">
                 <h3>SUBMIT JOB</h3>
@@ -2310,6 +2485,30 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command: cmd })
             });
+        }
+
+        // ========== ARM SWARM FUNCTIONS ==========
+        async function startArmMaze() {
+            await fetch('/api/arm/maze/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start_x: 1, start_y: 1, goal_x: 14, goal_y: 14 })
+            });
+            addEvent('ARM maze exploration started', 'job');
+        }
+
+        async function startArmTerrain() {
+            await fetch('/api/arm/terrain/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start_x: 16, start_y: 16 })
+            });
+            addEvent('ARM terrain exploration started', 'job');
+        }
+
+        async function killArmSwarm() {
+            await fetch('/api/arm/kill', { method: 'POST' });
+            addEvent('ARM swarm kill signal sent', 'alarm');
         }
 
         // Update fetchState to include maze and terrain

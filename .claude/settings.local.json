@@ -10,7 +10,10 @@
       "Bash(wsl:*)",
       "Bash(python:*)",
       "Bash(where:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(powershell -Command \"\\(Get-Content c:\\\\Users\\\\sotom\\\\nanOs\\\\kernel\\\\kernel.c\\).Count\")",
+      "Bash(powershell -Command \"\\(Get-Content c:\\\\Users\\\\sotom\\\\nanOs\\\\kernel\\\\tactical\\\\terrain.c\\).Count\")",
+      "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\sotom\\\\nanOs\\\\kernel\\\\kernel.c'' | Measure-Object -Line\\).Lines\")"
     ]
   }
 }
