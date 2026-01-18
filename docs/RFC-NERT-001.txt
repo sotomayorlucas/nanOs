@@ -1,0 +1,991 @@
+
+
+
+
+
+
+
+NanOS Project                                                   NanOS Team
+Request for Comments: NERT-001                                  January 2026
+Category: Standards Track
+
+
+         NanOS Ephemeral Reliable Transport (NERT) Protocol v1.0
+
+Abstract
+
+   This document specifies the NanOS Ephemeral Reliable Transport (NERT)
+   protocol, a hybrid UDP/TCP transport protocol designed specifically
+   for communication between disposable nodes in swarm computing
+   environments. NERT provides selective reliability, mandatory
+   encryption, and is optimized for nodes with limited lifetime and
+   no persistent storage.
+
+Status of This Memo
+
+   This document specifies a protocol for the NanOS project. Distribution
+   of this memo is unlimited.
+
+Copyright Notice
+
+   Copyright (c) 2026 NanOS Project. All rights reserved.
+
+Table of Contents
+
+   1.  Introduction . . . . . . . . . . . . . . . . . . . . . . . .   2
+       1.1.  Requirements Language  . . . . . . . . . . . . . . . .   2
+       1.2.  Terminology  . . . . . . . . . . . . . . . . . . . . .   3
+   2.  Protocol Overview  . . . . . . . . . . . . . . . . . . . . .   3
+       2.1.  Design Goals . . . . . . . . . . . . . . . . . . . . .   3
+       2.2.  Reliability Classes  . . . . . . . . . . . . . . . . .   4
+   3.  Packet Format  . . . . . . . . . . . . . . . . . . . . . . .   5
+       3.1.  Standard Header (20 bytes) . . . . . . . . . . . . . .   5
+       3.2.  Compact Header (12 bytes)  . . . . . . . . . . . . . .   7
+       3.3.  Flags Field  . . . . . . . . . . . . . . . . . . . . .   8
+       3.4.  Authentication Tag . . . . . . . . . . . . . . . . . .   8
+   4.  Cryptographic Operations . . . . . . . . . . . . . . . . . .   9
+       4.1.  Encryption Algorithm . . . . . . . . . . . . . . . . .   9
+       4.2.  Authentication Algorithm . . . . . . . . . . . . . . .  10
+       4.3.  Key Derivation . . . . . . . . . . . . . . . . . . . .  10
+       4.4.  Nonce Construction . . . . . . . . . . . . . . . . . .  11
+       4.5.  Key Rotation with Grace Window . . . . . . . . . . . .  12
+   5.  Connection Management  . . . . . . . . . . . . . . . . . . .  13
+       5.1.  Connection States  . . . . . . . . . . . . . . . . . .  13
+       5.2.  Two-Way Handshake  . . . . . . . . . . . . . . . . . .  14
+       5.3.  Connection Termination . . . . . . . . . . . . . . . .  15
+   6.  Reliability Mechanisms . . . . . . . . . . . . . . . . . . .  15
+       6.1.  Selective Acknowledgment (SACK)  . . . . . . . . . . .  15
+       6.2.  Retransmission . . . . . . . . . . . . . . . . . . . .  16
+       6.3.  RTT Estimation . . . . . . . . . . . . . . . . . . . .  17
+   7.  Forward Error Correction . . . . . . . . . . . . . . . . . .  17
+       7.1.  FEC Block Structure  . . . . . . . . . . . . . . . . .  18
+       7.2.  Encoding . . . . . . . . . . . . . . . . . . . . . . .  18
+       7.3.  Decoding . . . . . . . . . . . . . . . . . . . . . . .  19
+   8.  Multi-Path Transmission  . . . . . . . . . . . . . . . . . .  19
+       8.1.  Path Selection . . . . . . . . . . . . . . . . . . . .  20
+       8.2.  Deduplication  . . . . . . . . . . . . . . . . . . . .  20
+   9.  Security Considerations  . . . . . . . . . . . . . . . . . .  21
+       9.1.  Threat Model . . . . . . . . . . . . . . . . . . . . .  21
+       9.2.  Replay Protection  . . . . . . . . . . . . . . . . . .  22
+       9.3.  Key Compromise . . . . . . . . . . . . . . . . . . . .  22
+   10. Implementation Considerations  . . . . . . . . . . . . . . .  23
+       10.1. Memory Requirements  . . . . . . . . . . . . . . . . .  23
+       10.2. Platform-Specific Variations . . . . . . . . . . . . .  23
+   11. IANA Considerations  . . . . . . . . . . . . . . . . . . . .  24
+   12. References . . . . . . . . . . . . . . . . . . . . . . . . .  24
+       12.1. Normative References . . . . . . . . . . . . . . . . .  24
+       12.2. Informative References . . . . . . . . . . . . . . . .  25
+   Appendix A.  Test Vectors  . . . . . . . . . . . . . . . . . . .  25
+   Appendix B.  State Machine Diagrams  . . . . . . . . . . . . . .  27
+   Authors' Addresses . . . . . . . . . . . . . . . . . . . . . . .  28
+
+
+1.  Introduction
+
+   Traditional transport protocols like TCP and UDP were designed for
+   persistent hosts with stable network connections. In swarm computing
+   environments where nodes are intentionally ephemeral (designed to
+   exist for limited periods and regenerate), these protocols introduce
+   unnecessary overhead or lack essential features.
+
+   NERT addresses these limitations by providing:
+
+   o  Selective reliability based on message criticality
+   o  Mandatory encryption with efficient algorithms
+   o  Optimizations for nodes with no persistent state
+   o  Graceful handling of clock drift without time synchronization
+   o  Support for multi-path redundancy in critical messages
+
+1.1.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+1.2.  Terminology
+
+   Disposable Node:  A computing node designed with intentional limited
+      lifetime, typically regenerating with a new identity upon death.
+
+   Epoch:  A time period (default: 3600 seconds) during which a single
+      session key is primarily valid.
+
+   Grace Window:  A period at epoch boundaries during which keys from
+      adjacent epochs are also accepted.
+
+   Pheromone:  An application-layer message type in the NanOS swarm
+      protocol.
+
+   Swarm:  A collection of disposable nodes communicating via broadcast
+      or multicast.
+
+   Session Key:  A symmetric key derived from the master key for a
+      specific epoch.
+
+
+2.  Protocol Overview
+
+   NERT operates at the transport layer, sitting between the link layer
+   (Ethernet, WiFi) and the application layer (NanOS pheromones). All
+   NERT packets are encrypted and authenticated.
+
+       +------------------+
+       | Application      |  (Pheromones: HELLO, DATA, CMD, etc.)
+       +------------------+
+       | NERT             |  (This specification)
+       +------------------+
+       | Network          |  (Multicast: 230.0.0.1:1234)
+       +------------------+
+       | Link             |  (Ethernet, WiFi, ESP-NOW)
+       +------------------+
+
+                    Figure 1: Protocol Stack
+
+2.1.  Design Goals
+
+   NERT was designed with the following goals, in order of priority:
+
+   1.  Security: All communication MUST be encrypted and authenticated.
+
+   2.  Efficiency: Minimal overhead for resource-constrained devices.
+
+   3.  Selective Reliability: Different message types have different
+       delivery guarantees.
+
+   4.  Ephemeral-Friendly: No requirement for persistent state.
+
+   5.  Clock-Drift Tolerant: Operation without time synchronization.
+
+2.2.  Reliability Classes
+
+   NERT defines four reliability classes, allowing applications to
+   choose the appropriate level of delivery guarantee:
+
+   +-------+---------------+-----+-------+-----+------------------------+
+   | Value | Name          | ACK | Retry | FEC | Typical Use            |
+   +-------+---------------+-----+-------+-----+------------------------+
+   | 0x00  | FIRE_FORGET   | No  | No    | No  | Telemetry, heartbeats  |
+   | 0x01  | BEST_EFFORT   | No  | 2x    | No  | Data, KV operations    |
+   | 0x02  | RELIABLE      | Yes | 5x    | No  | Tasks, commands        |
+   | 0x03  | CRITICAL      | Yes | 10x   | Yes | Control plane, DIE cmd |
+   +-------+---------------+-----+-------+-----+------------------------+
+
+                Table 1: Reliability Classes
+
+   Implementations MUST support all four reliability classes.
+
+
+3.  Packet Format
+
+   NERT defines two header formats: a standard 20-byte header for
+   full-featured implementations, and a compact 12-byte header for
+   resource-constrained devices.
+
+3.1.  Standard Header (20 bytes)
+
+   The standard header is used on platforms with sufficient resources
+   (typically x86, ARM Cortex-A series).
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Magic     | Ver |Cls|Rsvd|           Node ID             |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Destination ID        |        Sequence Number       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |       ACK Number              |     Flags     |  Payload Len |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          Timestamp            |      TTL      |   Hop Count  |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Nonce Counter                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 2: Standard NERT Header
+
+   Magic (8 bits):
+      Fixed value 0x4E (ASCII 'N'). Packets with any other value in
+      this field MUST be silently discarded.
+
+   Version (4 bits):
+      Protocol version. This specification defines version 1 (0x1).
+
+   Class (2 bits):
+      Reliability class (see Section 2.2).
+
+   Reserved (2 bits):
+      Reserved for future use. MUST be set to zero on transmission.
+      MUST be ignored on reception.
+
+   Node ID (16 bits):
+      Identifier of the sending node. SHOULD be derived from hardware
+      identifiers (e.g., MAC address lower bytes).
+
+   Destination ID (16 bits):
+      Identifier of the intended recipient. A value of 0x0000 indicates
+      broadcast to all nodes.
+
+   Sequence Number (16 bits):
+      Packet sequence number, incremented for each packet sent.
+      Used for duplicate detection and acknowledgment.
+
+   ACK Number (16 bits):
+      When the ACK flag is set, this field contains the sequence number
+      being acknowledged. Otherwise, this field SHOULD be zero.
+
+   Flags (8 bits):
+      See Section 3.3.
+
+   Payload Length (8 bits):
+      Length of the encrypted payload in bytes. Maximum value is 255.
+
+   Timestamp (16 bits):
+      Lower 16 bits of the sender's tick counter at transmission time.
+      Used for RTT estimation.
+
+   TTL (8 bits):
+      Time-to-live, decremented at each hop. Packets with TTL=0 MUST
+      NOT be forwarded.
+
+   Hop Count (8 bits):
+      Number of hops this packet has traversed. Incremented at each
+      forwarding node.
+
+   Nonce Counter (32 bits):
+      Counter value used in nonce construction for encryption.
+      MUST be unique for each packet from a given node.
+
+3.2.  Compact Header (12 bytes)
+
+   The compact header is used on resource-constrained platforms
+   (ARM Cortex-M, ESP32).
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Magic     | Ver |Cls|Rsvd|           Node ID             |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |        Sequence Number        |     Flags     |  Payload Len |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Nonce Counter                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 3: Compact NERT Header
+
+   Fields have the same semantics as the standard header. The following
+   fields are omitted in compact mode:
+
+   o  Destination ID (broadcast only assumed)
+   o  ACK Number (piggybacked in payload if needed)
+   o  Timestamp (not used for RTT)
+   o  TTL and Hop Count (single-hop assumed)
+
+   Implementations using compact headers MUST NOT interoperate directly
+   with implementations using standard headers without a translation
+   gateway.
+
+3.3.  Flags Field
+
+   The Flags field is an 8-bit field with the following bit assignments:
+
+   +---------+------+------------------------------------------------+
+   | Bit     | Name | Description                                    |
+   +---------+------+------------------------------------------------+
+   | 0 (LSB) | SYN  | Synchronize: Connection initiation             |
+   | 1       | ACK  | Acknowledgment: ACK Number field is valid      |
+   | 2       | FIN  | Finish: Connection termination                 |
+   | 3       | RST  | Reset: Abort connection                        |
+   | 4       | ENC  | Encrypted: Payload is encrypted (MUST be 1)    |
+   | 5       | FEC  | FEC: Packet is part of FEC block               |
+   | 6       | FRAG | Fragment: Packet is a fragment                 |
+   | 7 (MSB) | MPATH| Multi-path: Sent via multiple paths            |
+   +---------+------+------------------------------------------------+
+
+                Table 2: Flag Bit Definitions
+
+   The ENC flag MUST be set to 1 for all valid NERT packets. Packets
+   with ENC=0 MUST be silently discarded.
+
+3.4.  Authentication Tag
+
+   Every NERT packet includes an 8-byte authentication tag immediately
+   following the encrypted payload:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   +                    Poly1305 Tag (truncated)                   +
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 4: Authentication Tag
+
+   The tag is computed over the concatenation of:
+   1. The NERT header (as Additional Authenticated Data)
+   2. The encrypted payload
+
+   See Section 4.2 for the authentication algorithm.
+
+
+4.  Cryptographic Operations
+
+   NERT uses symmetric cryptography with a pre-shared master key known
+   to all nodes in the swarm. Individual session keys are derived from
+   this master key.
+
+4.1.  Encryption Algorithm
+
+   NERT uses ChaCha8 [CHACHA] for encryption. ChaCha8 is a reduced-round
+   variant of ChaCha20, providing a balance between security and
+   performance on resource-constrained devices.
+
+   ChaCha8 Parameters:
+      Key size: 256 bits (32 bytes)
+      Nonce size: 96 bits (12 bytes)
+      Block size: 512 bits (64 bytes)
+      Rounds: 8 (vs. 20 for ChaCha20)
+
+   Security Consideration: While ChaCha8 has a lower security margin
+   than ChaCha20, it remains secure for ephemeral data with limited
+   lifetime (< 1 hour). The reduced rounds provide approximately 3x
+   performance improvement on microcontrollers.
+
+4.2.  Authentication Algorithm
+
+   NERT uses Poly1305 [POLY1305] for message authentication. The
+   resulting 128-bit tag is truncated to 64 bits (8 bytes) to reduce
+   overhead.
+
+   The authentication tag is computed as:
+
+      tag = Poly1305(key, header || ciphertext)[0:8]
+
+   Where:
+   o  key: The current session key
+   o  header: The NERT header (12 or 20 bytes)
+   o  ciphertext: The encrypted payload
+   o  [0:8]: Truncation to first 8 bytes
+
+   Truncation Consideration: The 64-bit tag provides adequate protection
+   against forgery for the expected packet rates and node lifetimes.
+   The probability of successful forgery is 2^-64 per attempt.
+
+4.3.  Key Derivation
+
+   Session keys are derived from the swarm master key using the
+   following procedure:
+
+      material = master_key || epoch_bytes || "NERT"
+      session_key = ChaCha8(master_key, zero_nonce, material[0:32])
+
+   Where:
+   o  master_key: 32-byte pre-shared swarm key
+   o  epoch_bytes: 4-byte big-endian epoch number
+   o  "NERT": ASCII literal 0x4E455254
+   o  zero_nonce: 12 bytes of zeros
+
+   The epoch number is calculated as:
+
+      epoch = floor(ticks_since_boot / (KEY_ROTATION_SEC * 1000))
+
+   Where KEY_ROTATION_SEC defaults to 3600 (one hour).
+
+   IMPORTANT: All nodes in the swarm MUST derive the same session key
+   for a given epoch. The key derivation MUST NOT include node-specific
+   data.
+
+4.4.  Nonce Construction
+
+   The 96-bit nonce is constructed as follows:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |           Node ID             |           Reserved            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                        Nonce Counter                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Timestamp (ticks)                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 5: Nonce Structure
+
+   Node ID (16 bits):
+      The sending node's identifier.
+
+   Reserved (16 bits):
+      Set to zero.
+
+   Nonce Counter (32 bits):
+      Copied from the packet header.
+
+   Timestamp (32 bits):
+      Current tick count when the packet is constructed.
+
+   This construction ensures nonce uniqueness across:
+   o  Different nodes (via Node ID)
+   o  Different packets from the same node (via Nonce Counter)
+   o  Time (via Timestamp, preventing counter reuse after reboot)
+
+4.5.  Key Rotation with Grace Window
+
+   To handle clock drift between nodes without time synchronization,
+   NERT implements a grace window mechanism at epoch boundaries.
+
+   Each node maintains three session keys:
+
+   o  session_key: For the current epoch
+   o  prev_session_key: For the previous epoch
+   o  next_session_key: For the next epoch (pre-computed)
+
+   When receiving a packet, the node determines which keys are valid
+   based on its position within the current epoch:
+
+      grace_window = 30000  (30 seconds, configurable)
+      epoch_duration = KEY_ROTATION_SEC * 1000
+
+      position = ticks_since_boot % epoch_duration
+
+      valid_keys = {current_key}
+
+      if position < grace_window:
+          valid_keys = valid_keys + {prev_key}
+
+      if position > (epoch_duration - grace_window):
+          valid_keys = valid_keys + {next_key}
+
+   The receiver attempts to verify the MAC using each valid key,
+   accepting the packet if any key produces a valid MAC.
+
+                        Epoch N-1    |    Epoch N    |   Epoch N+1
+                                     |               |
+      ==============================>|<=============>|<=============
+                                     |               |
+                           +----+----+----+   +----+----+----+
+                           | 30s| 30s|    |   |    | 30s| 30s|
+                           +----+----+----+   +----+----+----+
+                                     |               |
+      Accepts: key[N-1]              | key[N-1],N    | key[N],N+1
+
+                Figure 6: Grace Window Operation
+
+   This mechanism allows for up to 30 seconds of clock drift between
+   any two nodes while maintaining secure communication.
+
+
+5.  Connection Management
+
+   For RELIABLE and CRITICAL reliability classes, NERT maintains
+   connection state to enable acknowledgments and retransmission.
+
+5.1.  Connection States
+
+   A NERT connection can be in one of the following states:
+
+   CLOSED:
+      No connection exists. This is the initial and final state.
+
+   SYN_SENT:
+      A SYN has been sent, waiting for SYN+ACK.
+
+   ESTABLISHED:
+      Connection is active and data can be exchanged.
+
+   FIN_SENT:
+      A FIN has been sent, waiting for acknowledgment.
+
+   CLOSE_WAIT:
+      A FIN has been received, preparing to close.
+
+   TIME_WAIT:
+      Waiting before returning to CLOSED to ensure the peer received
+      the final ACK.
+
+5.2.  Two-Way Handshake
+
+   Unlike TCP's three-way handshake, NERT uses a simplified two-way
+   handshake suitable for ephemeral nodes:
+
+      Node A                                          Node B
+         |                                               |
+         |  ----------- SYN, seq=X, data ----------->    |
+         |                                               |
+         |  <-------- SYN+ACK, seq=Y, ack=X+1 --------   |
+         |                                               |
+         |  ----------- ACK, seq=X+1, ack=Y+1 ------->   |
+         |                                               |
+         |            (connection established)           |
+
+                Figure 7: Two-Way Handshake
+
+   The handshake proceeds as follows:
+
+   1. Node A sends a SYN packet with an initial sequence number X.
+      Data MAY be included in this packet (early data).
+
+   2. Node B responds with SYN+ACK, providing its own sequence number Y
+      and acknowledging X+1.
+
+   3. Node A sends ACK acknowledging Y+1. At this point, both nodes
+      consider the connection established.
+
+   If Node A does not receive SYN+ACK within the retransmission timeout,
+   it retransmits the SYN packet up to MAX_RETRIES times.
+
+5.3.  Connection Termination
+
+   Connections are terminated using the FIN flag:
+
+      Node A                                          Node B
+         |                                               |
+         |  -------------- FIN, seq=M -------------->    |
+         |                                               |
+         |  <------------- ACK, ack=M+1 -------------    |
+         |                                               |
+         |  <------------- FIN, seq=N ---------------    |
+         |                                               |
+         |  -------------- ACK, ack=N+1 ------------>    |
+         |                                               |
+         |            (connection closed)                |
+
+                Figure 8: Connection Termination
+
+   Either side may initiate termination. The RST flag may be used for
+   abrupt termination without the full exchange.
+
+
+6.  Reliability Mechanisms
+
+6.1.  Selective Acknowledgment (SACK)
+
+   For RELIABLE and CRITICAL classes, NERT uses selective acknowledgment
+   to efficiently indicate which packets have been received.
+
+   The SACK structure is optionally included in the payload:
+
+    0                   1                   2
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Base ACK              |    Bitmap    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 9: SACK Structure
+
+   Base ACK (16 bits):
+      Cumulative acknowledgment - all packets up to and including this
+      sequence number have been received.
+
+   Bitmap (8 bits):
+      Each bit indicates reception status for (Base ACK + 1 + bit_index).
+      Bit 0 = Base ACK + 1, Bit 7 = Base ACK + 8.
+
+   Example: Base ACK = 100, Bitmap = 0b00101001
+   o  Packets 1-100: Received (cumulative)
+   o  Packet 101: Received (bit 0)
+   o  Packet 102: NOT received
+   o  Packet 103: NOT received
+   o  Packet 104: Received (bit 3)
+   o  Packet 105: NOT received
+   o  Packet 106: Received (bit 5)
+
+6.2.  Retransmission
+
+   When a packet requires acknowledgment and none is received within
+   the Retransmission Timeout (RTO), the sender retransmits the packet.
+
+   Retransmission parameters:
+
+   +-----------------------+----------------+---------------------------+
+   | Parameter             | Default Value  | Description               |
+   +-----------------------+----------------+---------------------------+
+   | Initial RTO           | 200 ms         | Initial timeout value     |
+   | Minimum RTO           | 100 ms         | Floor for RTO             |
+   | Maximum RTO           | 2000 ms        | Ceiling for RTO           |
+   | Max Retries (RELIABLE)| 5              | Before connection failure |
+   | Max Retries (CRITICAL)| 10             | Before connection failure |
+   | Backoff Factor        | 2              | Exponential backoff       |
+   +-----------------------+----------------+---------------------------+
+
+                Table 3: Retransmission Parameters
+
+   Upon each retransmission, the RTO is doubled (exponential backoff)
+   up to the maximum value.
+
+6.3.  RTT Estimation
+
+   NERT uses the Jacobson algorithm for RTT estimation:
+
+      SRTT = (1 - alpha) * SRTT + alpha * RTT_sample
+      RTTVAR = (1 - beta) * RTTVAR + beta * |SRTT - RTT_sample|
+      RTO = SRTT + 4 * RTTVAR
+
+   Where:
+   o  alpha = 1/8
+   o  beta = 1/4
+   o  RTT_sample = current_ticks - packet_timestamp
+
+   Initial values:
+   o  SRTT = 200 ms
+   o  RTTVAR = 50 ms
+
+
+7.  Forward Error Correction
+
+   The CRITICAL reliability class uses Forward Error Correction to
+   enable recovery from packet loss without retransmission.
+
+7.1.  FEC Block Structure
+
+   FEC is applied to groups of 4 data shards, producing 2 parity shards:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |   Block ID    | Shard Index   | Total Shards  |   Reserved    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   +                         Shard Data                            +
+   |                          (32 bytes)                           |
+   +                                                               +
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+                Figure 10: FEC Block Structure
+
+   Block ID (8 bits):
+      Identifier for this FEC block, unique within a short time window.
+
+   Shard Index (8 bits):
+      Index of this shard within the block (0-3 = data, 4-5 = parity).
+
+   Total Shards (8 bits):
+      Total number of shards in this block (always 6).
+
+   Reserved (8 bits):
+      Set to zero.
+
+   Shard Data (32 bytes):
+      The actual shard content.
+
+7.2.  Encoding
+
+   Parity shards are computed using XOR:
+
+      parity[0] = data[0] XOR data[2]  (even shards)
+      parity[1] = data[1] XOR data[3]  (odd shards)
+
+   This simple scheme allows recovery from any single lost data shard,
+   or from two lost data shards if they are from different parity groups.
+
+7.3.  Decoding
+
+   To recover a lost shard:
+
+   o  If shard 0 is lost and parity[0] received:
+      data[0] = parity[0] XOR data[2]
+
+   o  If shard 1 is lost and parity[1] received:
+      data[1] = parity[1] XOR data[3]
+
+   Recovery is possible if:
+   o  At most 2 data shards are lost, AND
+   o  The lost shards are from different parity groups, AND
+   o  The corresponding parity shards are received
+
+
+8.  Multi-Path Transmission
+
+   For CRITICAL messages, NERT can transmit copies via multiple paths
+   to increase delivery probability.
+
+8.1.  Path Selection
+
+   The sender selects up to 3 distinct next-hop neighbors based on:
+
+   1. Diversity: Each path should use a different first-hop neighbor
+   2. Distance: Prefer neighbors with lower distance to destination
+   3. Activity: Prefer neighbors with recent activity (more reliable)
+
+   Path selection algorithm:
+
+      paths = []
+      excluded = []
+
+      for i in range(MAX_PATHS):
+          best = select_best_neighbor(excluded)
+          if best:
+              paths.append(best)
+              excluded.append(best)
+
+      return paths
+
+8.2.  Deduplication
+
+   Receivers maintain a deduplication cache to handle packets arriving
+   via multiple paths:
+
+      struct dedup_entry {
+          node_id: uint16
+          seq_num: uint16
+          received_tick: uint32
+      }
+
+   Cache size: 16 entries (configurable)
+   Entry lifetime: 2000 ms
+
+   Upon receiving a packet, the receiver:
+   1. Checks if (node_id, seq_num) exists in cache
+   2. If found and recent (< 2000 ms): Discard as duplicate
+   3. If not found: Add to cache, process packet
+
+
+9.  Security Considerations
+
+9.1.  Threat Model
+
+   NERT is designed to protect against:
+
+   o  Eavesdropping: All payloads are encrypted with ChaCha8.
+
+   o  Message Tampering: All packets include Poly1305 MAC.
+
+   o  Replay Attacks: Nonce uniqueness and replay window (Section 9.2).
+
+   o  Impersonation: Requires knowledge of swarm master key.
+
+   NERT does NOT protect against:
+
+   o  Denial of Service: Nodes can be flooded with packets.
+
+   o  Traffic Analysis: Packet sizes and timing are observable.
+
+   o  Compromised Master Key: All swarm communication is exposed.
+
+9.2.  Replay Protection
+
+   Each connection maintains a replay window:
+
+      highest_seq: uint16      // Highest sequence number received
+      bitmap: uint64           // Bitmap for [highest_seq-63, highest_seq]
+
+   Reception algorithm:
+
+      if seq > highest_seq:
+          shift = seq - highest_seq
+          if shift >= 64:
+              bitmap = 1
+          else:
+              bitmap = (bitmap << shift) | 1
+          highest_seq = seq
+          return ACCEPT
+
+      offset = highest_seq - seq
+      if offset >= 64:
+          return REJECT_TOO_OLD
+
+      if bitmap & (1 << offset):
+          return REJECT_REPLAY
+
+      bitmap |= (1 << offset)
+      return ACCEPT
+
+9.3.  Key Compromise
+
+   If the swarm master key is compromised:
+
+   1. All current and future communication can be decrypted.
+   2. Attackers can inject valid packets.
+   3. Attackers can impersonate any node.
+
+   Mitigation: Periodic key rotation at the swarm level (out of scope
+   for this specification).
+
+
+10.  Implementation Considerations
+
+10.1.  Memory Requirements
+
+   Minimum RAM requirements for NERT implementation:
+
+   +----------------------+--------+--------+--------+
+   | Component            | x86    | ARM    | ESP32  |
+   +----------------------+--------+--------+--------+
+   | Session Keys (3x32)  | 96 B   | 96 B   | 96 B   |
+   | Connections          | 800 B  | 400 B  | 400 B  |
+   | TX Windows           | 256 B  | 128 B  | 128 B  |
+   | RX Buffer            | 512 B  | 256 B  | 256 B  |
+   | Dedup Cache          | 128 B  | 64 B   | 64 B   |
+   | Statistics           | 50 B   | 50 B   | 50 B   |
+   +----------------------+--------+--------+--------+
+   | TOTAL                | ~1.8KB | ~1.0KB | ~1.0KB |
+   +----------------------+--------+--------+--------+
+
+                Table 4: Memory Requirements
+
+10.2.  Platform-Specific Variations
+
+   x86 (QEMU e1000):
+   o  Standard 20-byte header
+   o  8 simultaneous connections
+   o  Full FEC and multi-path support
+
+   ARM Cortex-M3 (Stellaris):
+   o  Compact 12-byte header
+   o  4 simultaneous connections
+   o  FEC optional, single-path only
+
+   ESP32:
+   o  Compact 12-byte header
+   o  4 simultaneous connections
+   o  ESP-NOW or UDP broadcast
+
+
+11.  IANA Considerations
+
+   This document requests the following assignments:
+
+   Ethertype:
+      0x4E52 ("NR") for NERT protocol
+
+   UDP Port (if using UDP encapsulation):
+      20050 (0x4E52) for NERT
+
+   Multicast Address:
+      230.0.0.1 for NERT broadcast
+
+
+12.  References
+
+12.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119, March 1997.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, May 2017.
+
+   [CHACHA]   Bernstein, D., "ChaCha, a variant of Salsa20", January
+              2008.
+
+   [POLY1305] Bernstein, D., "The Poly1305-AES message-authentication
+              code", March 2005.
+
+12.2.  Informative References
+
+   [RFC9000]  Iyengar, J. and M. Thomson, "QUIC: A UDP-Based Multiplexed
+              and Secure Transport", RFC 9000, May 2021.
+
+   [RFC5681]  Allman, M., Paxson, V., and E. Blanton, "TCP Congestion
+              Control", RFC 5681, September 2009.
+
+
+Appendix A.  Test Vectors
+
+A.1.  Key Derivation
+
+   Master Key (hex):
+      DEADBEEF CAFEBABE 8BADF00D FEEDFACE
+      1337C0DE ABCDEF01 23456789 9ABCDEF0
+
+   Epoch: 0x00000001
+
+   Expected Session Key (hex):
+      [Implementation-specific - compute and verify]
+
+A.2.  Nonce Construction
+
+   Node ID: 0x1234
+   Nonce Counter: 0x00000001
+   Timestamp: 0x0000ABCD
+
+   Expected Nonce (hex):
+      12 34 00 00 00 00 00 01 00 00 AB CD
+
+A.3.  Packet Encoding
+
+   Header fields:
+      Magic: 0x4E
+      Version: 0x1
+      Class: 0x02 (RELIABLE)
+      Node ID: 0x1234
+      Dest ID: 0x5678
+      Seq: 0x0001
+      Flags: 0x10 (ENC)
+      Payload Len: 0x04
+      TTL: 0x0F
+      Hop: 0x00
+      Nonce Counter: 0x00000001
+
+   Plaintext payload: "TEST" (0x54455354)
+
+   [Encoded packet bytes - implementation-specific]
+
+
+Appendix B.  State Machine Diagrams
+
+B.1.  Connection State Machine
+
+                         +--------+
+                         | CLOSED |
+                         +---+----+
+                             |
+               connect()     |     recv SYN
+          +-----------------+|+------------------+
+          |                  ||                  |
+          v                  ||                  v
+     +----------+            ||           +------------+
+     | SYN_SENT |----+       ||       +---| (implicit) |
+     +----------+    |       ||       |   +------------+
+          |          |       ||       |
+          | recv     | timeout|       | send
+          | SYN+ACK  | (retry)|       | SYN+ACK
+          |          |       ||       |
+          v          |       vv       v
+     +-------------+ |   +-------------+
+     | ESTABLISHED |<+   | ESTABLISHED |
+     +------+------+     +------+------+
+            |                   |
+            | send FIN          | recv FIN
+            v                   v
+     +----------+         +-----------+
+     | FIN_SENT |         | CLOSE_WAIT|
+     +----+-----+         +-----+-----+
+          |                     |
+          | recv ACK            | send FIN
+          v                     v
+     +-----------+        +-----------+
+     | TIME_WAIT |        | LAST_ACK  |
+     +-----+-----+        +-----+-----+
+           |                    |
+           | 2*RTT timeout      | recv ACK
+           v                    v
+     +--------+           +--------+
+     | CLOSED |           | CLOSED |
+     +--------+           +--------+
+
+                Figure 11: Connection State Machine
+
+
+Authors' Addresses
+
+   NanOS Project Team
+
+   Email: nanos-dev@example.com
+   URI:   https://github.com/nanos-project/nanos
+
+
+Full Copyright Statement
+
+   Copyright (c) 2026 NanOS Project.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents in effect on the date of
+   publication of this document. Please review these documents
+   carefully, as they describe your rights and restrictions with
+   respect to this document.
+
+   This document may not be modified, and derivative works of it may
+   not be created, except to format it for publication as an RFC or
+   to translate it into languages other than English.

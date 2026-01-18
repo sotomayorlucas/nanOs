@@ -1,0 +1,1753 @@
+%===============================================================================
+% NanOS Technical Manual
+% A Comprehensive Guide to the Disposable Node Operating System
+%===============================================================================
+
+\documentclass[11pt,a4paper,twoside]{book}
+
+%-------------------------------------------------------------------------------
+% Packages
+%-------------------------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english,spanish]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% Page layout
+\usepackage[margin=2.5cm,inner=3cm,outer=2cm]{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Graphics and diagrams
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{pgfplotstable}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{shapes,arrows,positioning,calc,fit,backgrounds,
+                decorations.pathreplacing,automata,chains,matrix,
+                shapes.geometric,shapes.multipart,patterns,babel}
+
+% Tables and lists
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{enumitem}
+
+% Code listings
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Math
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Links and references
+\usepackage{hyperref}
+\usepackage{cleveref}
+
+% Misc
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{framed}
+\usepackage{tcolorbox}
+\tcbuselibrary{listings,skins,breakable}
+
+%-------------------------------------------------------------------------------
+% Color Definitions
+%-------------------------------------------------------------------------------
+\definecolor{nanosprimary}{RGB}{45,85,140}
+\definecolor{nanossecondary}{RGB}{70,130,180}
+\definecolor{nanosaccent}{RGB}{220,80,60}
+\definecolor{nanosgreen}{RGB}{60,140,80}
+\definecolor{nanosgray}{RGB}{100,100,100}
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{200,200,200}
+
+%-------------------------------------------------------------------------------
+% Code Listing Style
+%-------------------------------------------------------------------------------
+\lstdefinestyle{nanosC}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{nanosprimary}\bfseries,
+    commentstyle=\color{nanosgreen}\itshape,
+    stringstyle=\color{nanosaccent},
+    numberstyle=\tiny\color{nanosgray},
+    numbers=left,
+    numbersep=8pt,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{codeframe},
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=4,
+    showstringspaces=false,
+    captionpos=b,
+    morekeywords={uint8_t,uint16_t,uint32_t,uint64_t,int8_t,int16_t,int32_t,
+                  bool,size_t,NULL}
+}
+
+\lstset{style=nanosC}
+
+%-------------------------------------------------------------------------------
+% TikZ Styles
+%-------------------------------------------------------------------------------
+\tikzstyle{block} = [rectangle, draw, fill=nanosprimary!20,
+    text width=5em, text centered, rounded corners, minimum height=3em]
+\tikzstyle{node} = [circle, draw, fill=nanossecondary!30,
+    minimum size=1.5cm, text centered]
+\tikzstyle{queen} = [circle, draw, fill=nanosaccent!40,
+    minimum size=2cm, text centered, line width=2pt]
+\tikzstyle{arrow} = [thick,->,>=stealth]
+\tikzstyle{line} = [thick]
+\tikzstyle{packet} = [rectangle, draw, fill=nanosgreen!20,
+    minimum width=8cm, minimum height=0.6cm]
+
+%-------------------------------------------------------------------------------
+% Header/Footer
+%-------------------------------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\leftmark}
+\fancyhead[RO]{\rightmark}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+%-------------------------------------------------------------------------------
+% Chapter Style
+%-------------------------------------------------------------------------------
+\titleformat{\chapter}[display]
+{\normalfont\huge\bfseries\color{nanosprimary}}
+{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+
+%-------------------------------------------------------------------------------
+% Custom Boxes
+%-------------------------------------------------------------------------------
+\newtcolorbox{infobox}[1][]{
+    colback=nanosprimary!5,
+    colframe=nanosprimary,
+    fonttitle=\bfseries,
+    title=#1,
+    breakable
+}
+
+\newtcolorbox{warningbox}[1][]{
+    colback=nanosaccent!5,
+    colframe=nanosaccent,
+    fonttitle=\bfseries,
+    title=#1,
+    breakable
+}
+
+\newtcolorbox{codebox}[1][]{
+    colback=codebg,
+    colframe=codeframe,
+    fonttitle=\bfseries\ttfamily,
+    title=#1,
+    breakable
+}
+
+%===============================================================================
+% Document
+%===============================================================================
+\begin{document}
+
+%-------------------------------------------------------------------------------
+% Title Page
+%-------------------------------------------------------------------------------
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+
+% Logo (represented as ASCII art converted to TikZ)
+\begin{tikzpicture}[scale=0.8]
+    % Hexagonal swarm pattern
+    \foreach \i in {0,60,...,300} {
+        \node[node, minimum size=1cm, fill=nanossecondary!40]
+            at (\i:2cm) {};
+    }
+    \node[queen, minimum size=1.5cm] at (0,0) {\textbf{Q}};
+
+    % Connections
+    \foreach \i in {0,60,...,300} {
+        \draw[arrow, nanosprimary!60] (0,0) -- (\i:1.6cm);
+    }
+    \foreach \i in {0,60,...,300} {
+        \pgfmathsetmacro{\nexti}{mod(\i+60,360)}
+        \draw[line, nanosgray!40] (\i:2cm) -- (\nexti:2cm);
+    }
+\end{tikzpicture}
+
+\vspace{1cm}
+
+{\Huge\bfseries\color{nanosprimary} NanOS}\\[0.5cm]
+{\Large\color{nanosgray} Nano Operating System for Disposable Nodes}\\[2cm]
+
+{\LARGE\bfseries Manual Técnico}\\[0.5cm]
+{\large Versión 0.3}\\[2cm]
+
+\begin{tikzpicture}
+    \draw[nanosprimary, line width=2pt] (0,0) -- (10,0);
+\end{tikzpicture}
+
+\vspace{1cm}
+
+{\large\textbf{Incluye:}}\\[0.3cm]
+{\large Arquitectura del Sistema}\\
+{\large Protocolo de Feromonas}\\
+{\large NERT: Ephemeral Reliable Transport}\\
+{\large Guía de Implementación}\\[2cm]
+
+\vfill
+
+{\large NanOS Project}\\
+{\large Enero 2026}
+
+\end{titlepage}
+
+%-------------------------------------------------------------------------------
+% Copyright
+%-------------------------------------------------------------------------------
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+\textbf{NanOS Technical Manual}\\
+Version 0.3\\[1cm]
+
+Copyright \textcopyright{} 2026 NanOS Project\\[0.5cm]
+
+Este documento está licenciado bajo MIT License.\\
+Se permite la copia, modificación y distribución.\\[1cm]
+
+\textit{``Los nodos mueren, el enjambre vive.''}
+\end{center}
+\vspace*{\fill}
+
+%-------------------------------------------------------------------------------
+% Table of Contents
+%-------------------------------------------------------------------------------
+\tableofcontents
+\listoffigures
+\listoftables
+
+%===============================================================================
+% PART I: NanOS Core
+%===============================================================================
+\part{NanOS Core}
+
+%-------------------------------------------------------------------------------
+\chapter{Introducción}
+%-------------------------------------------------------------------------------
+
+\section{¿Qué es NanOS?}
+
+NanOS es un sistema operativo minimalista diseñado para \textbf{nodos desechables}
+en entornos de computación distribuida. A diferencia de los sistemas operativos
+tradicionales que buscan estabilidad y persistencia, NanOS abraza la
+\textbf{efímera naturaleza} de sus nodos.
+
+\begin{infobox}[Filosofía de Diseño]
+\begin{itemize}
+    \item \textbf{Sin persistencia}: No hay disco, no hay filesystem. Todo es RAM volátil.
+    \item \textbf{Ciclo de vida limitado}: Los nodos tienen muerte programada (apoptosis).
+    \item \textbf{Regeneración}: Al morir, renacen con nueva identidad.
+    \item \textbf{Inteligencia colectiva}: El comportamiento emerge del enjambre.
+\end{itemize}
+\end{infobox}
+
+\section{Inspiración Biológica}
+
+NanOS se inspira en sistemas biológicos como colonias de hormigas y organismos
+unicelulares. Cada nodo es análogo a una célula que:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % Biological analogy diagram
+    \node[draw, rounded corners, fill=nanosgreen!20, minimum width=4cm,
+          minimum height=2cm] (cell) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Célula}\\
+            \small Ciclo de vida finito\\
+            \small Apoptosis programada
+        \end{tabular}
+    };
+
+    \node[draw, rounded corners, fill=nanosprimary!20, minimum width=4cm,
+          minimum height=2cm] (node) at (7,0) {
+        \begin{tabular}{c}
+            \textbf{Nodo NanOS}\\
+            \small MAX\_LIFETIME = 1h\\
+            \small HEAP\_CRITICAL = 90\%
+        \end{tabular}
+    };
+
+    \draw[arrow, very thick, nanosaccent] (cell) -- node[above] {Analogía} (node);
+
+    % Pheromone analogy
+    \node[draw, rounded corners, fill=nanosgreen!20, minimum width=4cm,
+          minimum height=1.5cm] (phero1) at (0,-3.5) {
+        \begin{tabular}{c}
+            \textbf{Feromonas}\\
+            \small Comunicación química
+        \end{tabular}
+    };
+
+    \node[draw, rounded corners, fill=nanosprimary!20, minimum width=4cm,
+          minimum height=1.5cm] (phero2) at (7,-3.5) {
+        \begin{tabular}{c}
+            \textbf{Pheromone Packets}\\
+            \small Broadcast multicast
+        \end{tabular}
+    };
+
+    \draw[arrow, very thick, nanosaccent] (phero1) -- node[above] {Analogía} (phero2);
+\end{tikzpicture}
+\caption{Analogía biológica de NanOS}
+\label{fig:bio-analogy}
+\end{figure}
+
+\section{Plataformas Soportadas}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{llll}
+\toprule
+\textbf{Plataforma} & \textbf{Arquitectura} & \textbf{RAM Típica} & \textbf{Uso} \\
+\midrule
+QEMU x86 & i386/i686 & 128KB--1MB & Desarrollo/Testing \\
+ARM Cortex-M3 & ARMv7-M & 64KB & IoT/Embedded \\
+ESP32 & Xtensa LX6 & 320KB & WiFi/Low-power \\
+ARM64 & ARMv8-A & 1MB+ & Servidores Edge \\
+\bottomrule
+\end{tabular}
+\caption{Plataformas soportadas por NanOS}
+\label{tab:platforms}
+\end{table}
+
+%-------------------------------------------------------------------------------
+\chapter{Arquitectura del Sistema}
+%-------------------------------------------------------------------------------
+
+\section{Estructura de Capas}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    layer/.style={draw, minimum width=12cm, minimum height=1.2cm,
+                  text centered, font=\small},
+    scale=0.9
+]
+    % Layers from top to bottom
+    \node[layer, fill=nanosaccent!20] (app) at (0,5)
+        {\textbf{Aplicación} -- Lógica de Rol (Worker, Explorer, Sentinel, Queen)};
+
+    \node[layer, fill=nanosprimary!20] (collective) at (0,3.5)
+        {\textbf{Colectivo} -- Elección, Gradiente, Vecinos, KV Store};
+
+    \node[layer, fill=nanossecondary!20] (protocol) at (0,2)
+        {\textbf{Protocolo} -- Pheromones, HMAC, Bloom Filter, Gossip};
+
+    \node[layer, fill=nanosgreen!20] (nert) at (0,0.5)
+        {\textbf{NERT} -- Transporte Híbrido UDP/TCP};
+
+    \node[layer, fill=nanosgray!20] (hal) at (0,-1)
+        {\textbf{HAL} -- Hardware Abstraction Layer};
+
+    \node[layer, fill=nanosgray!40] (hw) at (0,-2.5)
+        {\textbf{Hardware} -- e1000, Stellaris ETH, ESP32 WiFi};
+
+    % Arrows
+    \foreach \i in {1,...,5} {
+        \pgfmathsetmacro{\y}{5 - 1.5*\i + 0.75}
+        \pgfmathsetmacro{\ynext}{5 - 1.5*\i - 0.75}
+    }
+
+    \draw[arrow] (app.south) -- (collective.north);
+    \draw[arrow] (collective.south) -- (protocol.north);
+    \draw[arrow] (protocol.south) -- (nert.north);
+    \draw[arrow] (nert.south) -- (hal.north);
+    \draw[arrow] (hal.south) -- (hw.north);
+
+\end{tikzpicture}
+\caption{Arquitectura de capas de NanOS}
+\label{fig:layer-arch}
+\end{figure}
+
+\section{Componentes del Kernel}
+
+\subsection{Gestión de Memoria}
+
+NanOS utiliza un heap simple sin fragmentación externa mediante allocación
+de bloques de tamaño fijo.
+
+\begin{lstlisting}[caption={Constantes de memoria}]
+#define HEAP_SIZE           0x10000    /* 64KB heap */
+#define HEAP_CRITICAL_PCT   90         /* Muerte si > 90% */
+#define BLOCK_SIZE          64         /* Bloques de 64 bytes */
+\end{lstlisting}
+
+\subsection{Timer y Scheduling}
+
+El kernel utiliza un timer de sistema (PIT en x86, SysTick en ARM) para:
+
+\begin{itemize}
+    \item Mantener el contador de ticks global
+    \item Verificar condiciones de apoptosis
+    \item Rotar ventanas del Bloom filter
+    \item Actualizar timeouts de conexiones
+\end{itemize}
+
+\section{Ciclo de Vida del Nodo}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    state/.style={draw, rounded corners, minimum width=2.5cm,
+                  minimum height=1cm, text centered},
+    scale=0.85
+]
+    % States
+    \node[state, fill=nanosgreen!30] (boot) at (0,0) {BOOT};
+    \node[state, fill=nanosprimary!30] (init) at (3,0) {INIT};
+    \node[state, fill=nanossecondary!30] (active) at (6,0) {ACTIVE};
+    \node[state, fill=nanosaccent!30] (dying) at (9,0) {DYING};
+    \node[state, fill=nanosgray!30] (rebirth) at (6,-2.5) {REBIRTH};
+
+    % Transitions
+    \draw[arrow] (boot) -- node[above, font=\small] {hal\_init()} (init);
+    \draw[arrow] (init) -- node[above, font=\small] {nert\_init()} (active);
+    \draw[arrow] (active) -- node[above, font=\small] {apoptosis} (dying);
+    \draw[arrow] (dying) -- node[right, font=\small] {emit REBIRTH} (rebirth);
+    \draw[arrow] (rebirth) -| node[below, font=\small, pos=0.3] {new ID} (init);
+
+    % Conditions
+    \node[font=\scriptsize, text=nanosgray, align=center] at (7.5,0.8)
+        {heap $>$ 90\%\\OR\\age $>$ 1h};
+
+\end{tikzpicture}
+\caption{Ciclo de vida de un nodo NanOS}
+\label{fig:lifecycle}
+\end{figure}
+
+\subsection{Condiciones de Apoptosis}
+
+Un nodo entra en estado DYING cuando:
+
+\begin{enumerate}
+    \item \textbf{Memoria crítica}: Uso de heap $>$ 90\%
+    \item \textbf{Antigüedad}: Tiempo de vida $>$ \texttt{MAX\_CELL\_LIFETIME} (3600s)
+    \item \textbf{Comando externo}: Recibe \texttt{PHEROMONE\_DIE} autenticado
+\end{enumerate}
+
+%-------------------------------------------------------------------------------
+\chapter{Sistema de Roles}
+%-------------------------------------------------------------------------------
+
+\section{Roles Definidos}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    role/.style={draw, circle, minimum size=2.5cm, text centered,
+                 font=\small, line width=1.5pt},
+    scale=0.85
+]
+    % Queen
+    \node[role, fill=nanosaccent!40, draw=nanosaccent] (queen) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{QUEEN}\\
+            \tiny Coordinadora\\
+            \tiny Distance = 0
+        \end{tabular}
+    };
+
+    % Workers
+    \node[role, fill=nanosprimary!30, draw=nanosprimary] (w1) at (-3,-3) {
+        \begin{tabular}{c}
+            \textbf{WORKER}\\
+            \tiny Procesamiento\\
+            \tiny de tareas
+        \end{tabular}
+    };
+
+    % Explorer
+    \node[role, fill=nanosgreen!30, draw=nanosgreen] (exp) at (3,-3) {
+        \begin{tabular}{c}
+            \textbf{EXPLORER}\\
+            \tiny Descubrimiento\\
+            \tiny de terreno
+        \end{tabular}
+    };
+
+    % Sentinel
+    \node[role, fill=nanossecondary!30, draw=nanossecondary] (sent) at (0,-5) {
+        \begin{tabular}{c}
+            \textbf{SENTINEL}\\
+            \tiny Vigilancia\\
+            \tiny y alarmas
+        \end{tabular}
+    };
+
+    % Connections
+    \draw[arrow, nanosaccent] (queen) -- node[left, font=\tiny] {CMD} (w1);
+    \draw[arrow, nanosaccent] (queen) -- node[right, font=\tiny] {CMD} (exp);
+    \draw[arrow, nanosaccent] (queen) -- node[right, font=\tiny] {CMD} (sent);
+
+    \draw[arrow, nanosprimary, dashed] (w1) -- node[below, font=\tiny] {TASK\_DONE} (queen);
+    \draw[arrow, nanosgreen, dashed] (exp) -- node[below, font=\tiny] {TERRAIN} (queen);
+    \draw[arrow, nanossecondary, dashed] (sent) -- node[left, font=\tiny] {ALARM} (queen);
+
+\end{tikzpicture}
+\caption{Sistema de roles en el enjambre}
+\label{fig:roles}
+\end{figure}
+
+\section{Transición de Roles}
+
+Los nodos pueden cambiar de rol dinámicamente basándose en:
+
+\begin{itemize}
+    \item \textbf{Necesidades del enjambre}: Si hay déficit de exploradores,
+          workers pueden transicionar
+    \item \textbf{Muerte de la reina}: Se inicia proceso de elección
+    \item \textbf{Comando de la reina}: Reasignación directa
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Condición} & \textbf{Umbral} & \textbf{Acción} \\
+\midrule
+Sentinelas $<$ 10\% & MIN\_SENTINEL\_RATIO & Worker $\rightarrow$ Sentinel \\
+Exploradores $<$ 10\% & MIN\_EXPLORER\_RATIO & Worker $\rightarrow$ Explorer \\
+Sin reina detectada & QUEEN\_TIMEOUT & Iniciar elección \\
+\bottomrule
+\end{tabular}
+\caption{Reglas de transición de roles}
+\label{tab:role-transition}
+\end{table}
+
+\section{Algoritmo de Elección de Reina}
+
+El algoritmo de elección es \textbf{determinístico} y garantiza convergencia:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    phase/.style={draw, rounded corners, minimum width=3cm,
+                  minimum height=1.5cm, text centered},
+    scale=0.9
+]
+    % Phases
+    \node[phase, fill=nanosprimary!20] (detect) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Detección}\\
+            \small No queen heard\\
+            \small for 5s
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanossecondary!20] (vote) at (5,0) {
+        \begin{tabular}{c}
+            \textbf{Votación}\\
+            \small Broadcast\\
+            \small ELECTION
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanosaccent!20] (count) at (10,0) {
+        \begin{tabular}{c}
+            \textbf{Conteo}\\
+            \small Highest ID\\
+            \small wins
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanosgreen!20] (crown) at (5,-3) {
+        \begin{tabular}{c}
+            \textbf{Coronación}\\
+            \small CORONATION\\
+            \small authenticated
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[arrow] (detect) -- node[above, font=\small] {timeout} (vote);
+    \draw[arrow] (vote) -- node[above, font=\small] {5s window} (count);
+    \draw[arrow] (count) -- node[right, font=\small] {announce} (crown);
+    \draw[arrow, dashed] (crown) -| node[below, font=\small] {cooldown 10s} (detect);
+
+\end{tikzpicture}
+\caption{Fases del algoritmo de elección}
+\label{fig:election}
+\end{figure}
+
+\begin{lstlisting}[caption={Estructura de estado de elección}]
+struct election_state {
+    uint32_t election_id;      /* ID unico de eleccion */
+    uint32_t started_at;       /* Tick de inicio */
+    uint32_t my_vote;          /* A quien voto */
+    uint32_t highest_vote_id;  /* Maximo ID visto */
+    uint8_t  participating;    /* Participando? */
+    uint8_t  phase;            /* 0=none, 1=voting, 2=counting */
+};
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{Protocolo de Feromonas}
+%-------------------------------------------------------------------------------
+
+\section{Tipos de Pheromones}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{clcl}
+\toprule
+\textbf{Código} & \textbf{Nombre} & \textbf{Auth} & \textbf{Descripción} \\
+\midrule
+0x01 & HELLO & No & Heartbeat con información de gradiente \\
+0x02 & DATA & No & Transporte de datos genérico \\
+0x03 & ALARM & No & Alerta de peligro detectado \\
+0x04 & ECHO & No & Respuesta/reconocimiento \\
+0x05 & ELECTION & No & Voto en elección de reina \\
+0x06 & CORONATION & \textbf{Sí} & Anuncio de nueva reina \\
+0x10 & QUEEN\_CMD & \textbf{Sí} & Comando de la reina \\
+0x20--0x22 & KV\_* & No & Key-Value store distribuido \\
+0x30 & TASK & No & Asignación de tarea \\
+0x40 & SENSOR & No & Lectura de sensor \\
+0x70--0x73 & MAZE\_* & No & Exploración de laberinto \\
+0x80--0x87 & TERRAIN\_* & No & Mapeo de terreno \\
+0xFE & REBIRTH & \textbf{Sí} & Notificación de muerte/renacimiento \\
+0xFF & DIE & \textbf{Sí} & Comando de terminación \\
+\bottomrule
+\end{tabular}
+\caption{Tipos de pheromones y sus características}
+\label{tab:pheromone-types}
+\end{table}
+
+\section{Formato de Paquete}
+
+\subsection{Paquete Estándar (64 bytes)}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    field/.style={draw, minimum height=0.8cm, text centered, font=\small},
+    scale=0.7
+]
+    % Header row 1
+    \node[field, fill=nanosprimary!20, minimum width=2cm] at (0,0) {magic};
+    \node[field, fill=nanosprimary!20, minimum width=2cm] at (2,0) {node\_id};
+    \node[field, fill=nanosprimary!20, minimum width=1cm] at (4,0) {type};
+    \node[field, fill=nanosprimary!20, minimum width=1cm] at (5,0) {ttl};
+    \node[field, fill=nanosprimary!20, minimum width=1cm] at (6,0) {flags};
+    \node[field, fill=nanosprimary!20, minimum width=1cm] at (7,0) {ver};
+
+    % Header row 2
+    \node[field, fill=nanossecondary!20, minimum width=2cm] at (0,-0.8) {seq};
+    \node[field, fill=nanossecondary!20, minimum width=2cm] at (2,-0.8) {dest\_id};
+    \node[field, fill=nanossecondary!20, minimum width=1cm] at (4,-0.8) {dist};
+    \node[field, fill=nanossecondary!20, minimum width=1cm] at (5,-0.8) {hop};
+    \node[field, fill=nanossecondary!20, minimum width=2cm] at (7,-0.8) {via\_node};
+
+    % HMAC
+    \node[field, fill=nanosaccent!20, minimum width=4cm] at (1,-1.6) {hmac[8]};
+    \node[field, fill=nanosaccent!20, minimum width=4cm] at (5,-1.6) {(cont.)};
+
+    % Payload
+    \node[field, fill=nanosgreen!20, minimum width=8cm] at (3,-2.4) {payload[32]};
+
+    % Labels
+    \node[font=\scriptsize, anchor=west] at (8.5,0) {Bytes 0--7};
+    \node[font=\scriptsize, anchor=west] at (8.5,-0.8) {Bytes 8--15};
+    \node[font=\scriptsize, anchor=west] at (8.5,-1.6) {Bytes 16--23};
+    \node[font=\scriptsize, anchor=west] at (8.5,-2.4) {Bytes 24--55};
+
+    % Brace for total
+    \draw[decorate, decoration={brace, amplitude=10pt, mirror}]
+        (-1,-2.8) -- (-1,0.4) node[midway, left=12pt, font=\small] {64 bytes};
+
+\end{tikzpicture}
+\caption{Estructura del paquete pheromone estándar}
+\label{fig:pheromone-packet}
+\end{figure}
+
+\subsection{Paquete Compacto ARM (24 bytes)}
+
+Para plataformas con recursos limitados, se usa un formato compacto con
+\textbf{62\% menos overhead}:
+
+\begin{lstlisting}[caption={Estructura del paquete compacto}]
+struct nanos_pheromone_compact {
+    uint8_t  magic;         /* 0xAA */
+    uint16_t node_id;       /* 16-bit truncado */
+    uint8_t  type;
+    uint8_t  ttl_flags;     /* TTL(4) + flags(4) */
+    uint8_t  seq;           /* 8-bit sequence */
+    uint16_t dest_id;
+    uint8_t  dist_hop;      /* distance(4) + hop(4) */
+    uint8_t  payload[8];
+    uint8_t  hmac[4];       /* 4-byte truncado */
+    uint8_t  reserved[3];
+};  /* Total: 24 bytes */
+\end{lstlisting}
+
+\section{Autenticación HMAC}
+
+Los paquetes críticos requieren autenticación mediante un HMAC basado en
+SipHash simplificado:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, rounded corners, minimum width=2.5cm,
+                  minimum height=1cm, text centered, font=\small},
+    scale=0.85
+]
+    % Input
+    \node[block, fill=nanosprimary!20] (key) at (0,2) {Swarm Key};
+    \node[block, fill=nanossecondary!20] (msg) at (0,0) {Packet Data};
+
+    % SipHash
+    \node[block, fill=nanosaccent!20, minimum width=3.5cm] (sip) at (5,1) {
+        \begin{tabular}{c}
+            \textbf{SipHash-2-4}\\
+            \small (simplified)
+        \end{tabular}
+    };
+
+    % Output
+    \node[block, fill=nanosgreen!20] (hmac) at (10,1) {HMAC[8]};
+
+    % Arrows
+    \draw[arrow] (key) -| (sip);
+    \draw[arrow] (msg) -| (sip);
+    \draw[arrow] (sip) -- (hmac);
+
+    % Annotation
+    \node[font=\scriptsize, text=nanosgray] at (5,-0.5) {4 rounds mixing};
+
+\end{tikzpicture}
+\caption{Proceso de generación de HMAC}
+\label{fig:hmac}
+\end{figure}
+
+%-------------------------------------------------------------------------------
+\chapter{Mecanismos de Red}
+%-------------------------------------------------------------------------------
+
+\section{Bloom Filter para Deduplicación}
+
+El Bloom filter proporciona deduplicación $O(1)$ con uso mínimo de memoria:
+
+\begin{lstlisting}[caption={Configuración del Bloom filter}]
+#define BLOOM_BITS      256     /* 32 bytes */
+#define BLOOM_HASH_K    3       /* 3 funciones hash */
+#define BLOOM_SLOTS     4       /* Ventanas rotativas */
+#define BLOOM_WINDOW_MS 500     /* 500ms por ventana */
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Bloom filter visualization
+    \foreach \slot in {0,...,3} {
+        \node[font=\small] at (-1.5, -\slot*1.2) {Slot \slot};
+        \foreach \bit in {0,...,15} {
+            \pgfmathsetmacro{\fill}{random(0,1) > 0.7 ? "nanosprimary!40" : "white"}
+            \node[draw, minimum size=0.5cm, fill=\fill]
+                at (\bit*0.55, -\slot*1.2) {};
+        }
+    }
+
+    % Arrow showing rotation
+    \draw[arrow, thick, nanosaccent] (9, 0) arc (90:-90:0.6 and 2.4);
+    \node[font=\small, nanosaccent] at (10.5, -1.2) {Rotate every 500ms};
+
+    % Labels
+    \node[font=\scriptsize] at (4, 1) {256 bits = 32 bytes per slot};
+
+\end{tikzpicture}
+\caption{Visualización del Bloom filter con slots rotativos}
+\label{fig:bloom}
+\end{figure}
+
+\section{Gossip Protocol}
+
+El protocolo de gossip controla la propagación de mensajes para evitar
+tormentas de broadcast:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=2cm,
+    every node/.style={font=\small}
+]
+    % Probability decay graph
+    \begin{axis}[
+        width=10cm,
+        height=6cm,
+        xlabel={Copias vistas},
+        ylabel={Probabilidad de relay (\%)},
+        xmin=0, xmax=10,
+        ymin=0, ymax=110,
+        grid=major,
+        legend pos=north east
+    ]
+
+    % Exponential decay: prob = 100 * 0.8^copies
+    \addplot[thick, nanosprimary, mark=*] coordinates {
+        (0, 100) (1, 80) (2, 64) (3, 51.2) (4, 41)
+        (5, 32.8) (6, 26.2) (7, 21) (8, 16.8) (9, 13.4) (10, 10.7)
+    };
+    \addlegendentry{Probabilidad de relay}
+
+    % Threshold line
+    \addplot[dashed, nanosaccent] coordinates {(0, 20) (10, 20)};
+    \addlegendentry{Umbral mínimo (20\%)}
+
+    \end{axis}
+\end{tikzpicture}
+\caption{Decaimiento de probabilidad en el protocolo gossip}
+\label{fig:gossip-decay}
+\end{figure}
+
+\section{Gradient Routing}
+
+El enrutamiento por gradiente permite dirigir mensajes hacia la reina:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    scale=0.85
+]
+    % Queen at center
+    \node[queen, align=center] (q) at (0,0) {\textbf{Q}\\d=0};
+
+    % Distance 1
+    \foreach \i in {0,72,...,288} {
+        \node[node, fill=nanosprimary!40] (d1-\i) at (\i:2.5cm) {d=1};
+    }
+
+    % Distance 2
+    \foreach \i in {36,108,...,324} {
+        \node[node, fill=nanossecondary!30, minimum size=1.2cm] (d2-\i) at (\i:4.5cm) {d=2};
+    }
+
+    % Connections showing gradient
+    \foreach \i in {0,72,...,288} {
+        \draw[arrow, nanosprimary!60] (d1-\i) -- (q);
+    }
+
+    \foreach \i/\j in {36/0, 108/72, 180/144, 252/216, 324/288} {
+        \draw[arrow, nanossecondary!60] (d2-\i) -- (d1-\j);
+    }
+
+    % Legend
+    \node[anchor=west, font=\small] at (5, 2) {$d$ = distancia a la reina};
+    \node[anchor=west, font=\small] at (5, 1.3) {Flechas = dirección del gradiente};
+
+\end{tikzpicture}
+\caption{Enrutamiento por gradiente hacia la reina}
+\label{fig:gradient}
+\end{figure}
+
+%===============================================================================
+% PART II: NERT Protocol
+%===============================================================================
+\part{Protocolo NERT}
+
+%-------------------------------------------------------------------------------
+\chapter{Visión General de NERT}
+%-------------------------------------------------------------------------------
+
+\section{Motivación}
+
+Los protocolos tradicionales no satisfacen las necesidades de nodos desechables:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Característica} & \textbf{TCP} & \textbf{UDP} & \textbf{NERT} \\
+\midrule
+Confiabilidad & Siempre & Nunca & \textbf{Selectiva} \\
+Encriptación & Opcional & No & \textbf{Obligatoria} \\
+Handshake & 3-way & Ninguno & \textbf{2-way} \\
+FEC & No & No & \textbf{Opcional} \\
+Multi-path & No & No & \textbf{Sí} \\
+RAM/conexión & $\sim$2KB & $\sim$0 & \textbf{$\sim$100B} \\
+Optimizado para efímeros & No & Parcial & \textbf{Sí} \\
+\bottomrule
+\end{tabular}
+\caption{Comparación de NERT con protocolos tradicionales}
+\label{tab:nert-comparison}
+\end{table}
+
+\section{Clases de Confiabilidad}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    class/.style={draw, rounded corners, minimum width=3cm,
+                  minimum height=2cm, text centered, font=\small},
+    scale=0.8
+]
+    % Four classes
+    \node[class, fill=nanosgray!20] (ff) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{FIRE\_FORGET}\\
+            \small 0x00\\
+            \small No ACK\\
+            \small No retry
+        \end{tabular}
+    };
+
+    \node[class, fill=nanossecondary!20] (be) at (4,0) {
+        \begin{tabular}{c}
+            \textbf{BEST\_EFFORT}\\
+            \small 0x01\\
+            \small No ACK\\
+            \small 2x retry
+        \end{tabular}
+    };
+
+    \node[class, fill=nanosprimary!20] (rel) at (8,0) {
+        \begin{tabular}{c}
+            \textbf{RELIABLE}\\
+            \small 0x02\\
+            \small ACK required\\
+            \small 5x retry
+        \end{tabular}
+    };
+
+    \node[class, fill=nanosaccent!20] (crit) at (12,0) {
+        \begin{tabular}{c}
+            \textbf{CRITICAL}\\
+            \small 0x03\\
+            \small ACK + FEC\\
+            \small 10x + multipath
+        \end{tabular}
+    };
+
+    % Overhead arrow
+    \draw[arrow, very thick, nanosgray] (-1.5,-2) -- (13.5,-2);
+    \node[font=\small] at (6,-2.5) {Overhead $\rightarrow$};
+
+    % Reliability arrow
+    \draw[arrow, very thick, nanosgreen] (-1.5,-3) -- (13.5,-3);
+    \node[font=\small] at (6,-3.5) {Confiabilidad $\rightarrow$};
+
+\end{tikzpicture}
+\caption{Clases de confiabilidad de NERT}
+\label{fig:reliability-classes}
+\end{figure}
+
+%-------------------------------------------------------------------------------
+\chapter{Formato de Paquete NERT}
+%-------------------------------------------------------------------------------
+
+\section{Header Estándar (20 bytes)}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.55]
+    % Bit ruler
+    \foreach \i in {0,4,...,28} {
+        \node[font=\tiny] at (\i*0.5 + 0.25, 1.2) {\i};
+    }
+    \draw[thin] (0,1) -- (16,1);
+
+    % Row 0
+    \node[draw, fill=nanosprimary!20, minimum width=2cm, minimum height=0.8cm]
+        at (1,0) {\small magic};
+    \node[draw, fill=nanosprimary!20, minimum width=1cm, minimum height=0.8cm]
+        at (2.5,0) {\tiny ver};
+    \node[draw, fill=nanosprimary!20, minimum width=0.5cm, minimum height=0.8cm]
+        at (3.25,0) {\tiny c};
+    \node[draw, fill=nanosprimary!20, minimum width=0.5cm, minimum height=0.8cm]
+        at (3.75,0) {\tiny r};
+    \node[draw, fill=nanossecondary!20, minimum width=4cm, minimum height=0.8cm]
+        at (6,0) {\small node\_id};
+
+    % Row 1
+    \node[draw, fill=nanossecondary!20, minimum width=4cm, minimum height=0.8cm]
+        at (2,-1) {\small dest\_id};
+    \node[draw, fill=nanossecondary!20, minimum width=4cm, minimum height=0.8cm]
+        at (6,-1) {\small seq\_num};
+
+    % Row 2
+    \node[draw, fill=nanosgreen!20, minimum width=4cm, minimum height=0.8cm]
+        at (2,-2) {\small ack\_num};
+    \node[draw, fill=nanosgreen!20, minimum width=2cm, minimum height=0.8cm]
+        at (5,-2) {\small flags};
+    \node[draw, fill=nanosgreen!20, minimum width=2cm, minimum height=0.8cm]
+        at (7,-2) {\small len};
+
+    % Row 3
+    \node[draw, fill=nanosgray!20, minimum width=4cm, minimum height=0.8cm]
+        at (2,-3) {\small timestamp};
+    \node[draw, fill=nanosgray!20, minimum width=2cm, minimum height=0.8cm]
+        at (5,-3) {\small ttl};
+    \node[draw, fill=nanosgray!20, minimum width=2cm, minimum height=0.8cm]
+        at (7,-3) {\small hop};
+
+    % Row 4
+    \node[draw, fill=nanosaccent!20, minimum width=8cm, minimum height=0.8cm]
+        at (4,-4) {\small nonce\_counter};
+
+    % Byte labels
+    \node[font=\tiny, anchor=east] at (-0.2,0) {0};
+    \node[font=\tiny, anchor=east] at (-0.2,-1) {4};
+    \node[font=\tiny, anchor=east] at (-0.2,-2) {8};
+    \node[font=\tiny, anchor=east] at (-0.2,-3) {12};
+    \node[font=\tiny, anchor=east] at (-0.2,-4) {16};
+
+    % Legend
+    \node[font=\scriptsize] at (12,0) {c = class (2 bits)};
+    \node[font=\scriptsize] at (12,-0.5) {r = reserved};
+
+\end{tikzpicture}
+\caption{Header NERT estándar de 20 bytes}
+\label{fig:nert-header}
+\end{figure}
+
+\section{Campo de Flags}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccl}
+\toprule
+\textbf{Bit} & \textbf{Nombre} & \textbf{Descripción} \\
+\midrule
+0 & SYN & Inicio de conexión \\
+1 & ACK & Acknowledgment válido \\
+2 & FIN & Fin de conexión \\
+3 & RST & Reset/abort \\
+4 & ENC & Payload encriptado (siempre 1) \\
+5 & FEC & Incluye bloque FEC \\
+6 & FRAG & Paquete fragmentado \\
+7 & MPATH & Multi-path habilitado \\
+\bottomrule
+\end{tabular}
+\caption{Definición de bits del campo flags}
+\label{tab:flags}
+\end{table}
+
+\section{Estructura Completa del Paquete}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Header
+    \node[draw, fill=nanosprimary!20, minimum width=8cm, minimum height=1cm]
+        (header) at (0,0) {\textbf{Header} (20 bytes)};
+
+    % Payload
+    \node[draw, fill=nanosgreen!20, minimum width=8cm, minimum height=1.5cm]
+        (payload) at (0,-1.5) {
+            \begin{tabular}{c}
+                \textbf{Encrypted Payload}\\
+                \small (1--255 bytes)
+            \end{tabular}
+        };
+
+    % Auth tag
+    \node[draw, fill=nanosaccent!20, minimum width=8cm, minimum height=0.8cm]
+        (tag) at (0,-2.8) {\textbf{Poly1305 Tag} (8 bytes)};
+
+    % Sizes
+    \draw[decorate, decoration={brace, amplitude=5pt, mirror}]
+        (4.2,0.5) -- (4.2,-3.2)
+        node[midway, right=8pt, font=\small] {30--283 bytes total};
+
+    % Encryption scope
+    \draw[dashed, nanosaccent, thick] (-4.3,-0.7) rectangle (4.3,-2.3);
+    \node[font=\tiny, nanosaccent, anchor=west] at (-4.2,-0.85) {ChaCha8 encrypted};
+
+    % MAC scope
+    \draw[dotted, nanosprimary, thick] (-4.5,0.5) rectangle (4.5,-2.5);
+    \node[font=\tiny, nanosprimary, anchor=west] at (-4.4,0.35) {Poly1305 authenticated};
+
+\end{tikzpicture}
+\caption{Estructura completa del paquete NERT}
+\label{fig:nert-packet}
+\end{figure}
+
+%-------------------------------------------------------------------------------
+\chapter{Criptografía}
+%-------------------------------------------------------------------------------
+
+\section{Algoritmos Utilizados}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Función} & \textbf{Algoritmo} & \textbf{Parámetros} \\
+\midrule
+Encriptación & ChaCha8 & 256-bit key, 96-bit nonce \\
+Autenticación & Poly1305 & 256-bit key, truncated to 64-bit \\
+Key Derivation & ChaCha8-based PRF & Master key + epoch \\
+\bottomrule
+\end{tabular}
+\caption{Algoritmos criptográficos de NERT}
+\label{tab:crypto-algos}
+\end{table}
+
+\section{Derivación de Claves}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw, rounded corners, minimum width=2.5cm,
+                  minimum height=1cm, text centered, font=\small},
+    scale=0.9
+]
+    % Inputs
+    \node[block, fill=nanosprimary!30] (master) at (0,2) {Master Key};
+    \node[block, fill=nanossecondary!30] (epoch) at (0,0) {Epoch (32-bit)};
+    \node[block, fill=nanosgray!30] (const) at (0,-2) {``NERT''};
+
+    % Concatenation
+    \node[draw, circle, fill=nanosaccent!20, minimum size=1cm] (concat) at (4,0) {$\|$};
+
+    % PRF
+    \node[block, fill=nanosaccent!30, minimum width=3cm] (prf) at (8,0) {
+        \begin{tabular}{c}
+            ChaCha8\\
+            (PRF mode)
+        \end{tabular}
+    };
+
+    % Output
+    \node[block, fill=nanosgreen!30] (session) at (12,0) {Session Key};
+
+    % Connections
+    \draw[arrow] (master) -| (concat);
+    \draw[arrow] (epoch) -- (concat);
+    \draw[arrow] (const) -| (concat);
+    \draw[arrow] (concat) -- (prf);
+    \draw[arrow] (prf) -- (session);
+
+\end{tikzpicture}
+\caption{Proceso de derivación de clave de sesión}
+\label{fig:key-derivation}
+\end{figure}
+
+\section{Ventana de Gracia para Rotación de Claves}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % Timeline
+    \draw[thick, ->] (0,0) -- (16,0) node[right] {tiempo};
+
+    % Epoch markers
+    \draw[thick] (0,-0.3) -- (0,0.3);
+    \draw[thick] (5,-0.3) -- (5,0.3);
+    \draw[thick] (10,-0.3) -- (10,0.3);
+    \draw[thick] (15,-0.3) -- (15,0.3);
+
+    \node[below, font=\small] at (0,-0.3) {$E_{n-1}$};
+    \node[below, font=\small] at (5,-0.3) {$E_n$};
+    \node[below, font=\small] at (10,-0.3) {$E_{n+1}$};
+    \node[below, font=\small] at (15,-0.3) {$E_{n+2}$};
+
+    % Grace windows
+    \fill[nanosprimary!30] (4.5,-1.5) rectangle (5.5,-2);
+    \fill[nanosprimary!30] (9.5,-1.5) rectangle (10.5,-2);
+
+    \node[font=\tiny] at (5,-1.75) {30s};
+    \node[font=\tiny] at (10,-1.75) {30s};
+
+    % Valid keys indicator
+    \draw[thick, nanosgreen] (0,-3) -- (5,-3);
+    \node[left, font=\scriptsize] at (0,-3) {$K_{n-1}$};
+
+    \draw[thick, nanosprimary] (4.5,-3.5) -- (10.5,-3.5);
+    \node[left, font=\scriptsize] at (4.5,-3.5) {$K_n$};
+
+    \draw[thick, nanosaccent] (9.5,-4) -- (15,-4);
+    \node[left, font=\scriptsize] at (9.5,-4) {$K_{n+1}$};
+
+    % Legend
+    \node[font=\small, anchor=west] at (0,-5) {Ventana de gracia: acepta claves de épocas adyacentes};
+
+\end{tikzpicture}
+\caption{Mecanismo de ventana de gracia para rotación de claves}
+\label{fig:grace-window}
+\end{figure}
+
+\begin{warningbox}[Problema de Sincronización]
+Sin sincronización de tiempo, nodos con relojes desincronizados podrían
+rechazar paquetes válidos en el cambio de época. La ventana de gracia
+de 30 segundos permite tolerancia a drift de hasta $\pm$30s entre nodos.
+\end{warningbox}
+
+\section{Construcción del Nonce}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Nonce structure
+    \node[draw, fill=nanosprimary!20, minimum width=2cm, minimum height=1cm]
+        at (0,0) {\small node\_id};
+    \node[draw, fill=nanosgray!20, minimum width=2cm, minimum height=1cm]
+        at (2,0) {\small reserved};
+    \node[draw, fill=nanossecondary!20, minimum width=4cm, minimum height=1cm]
+        at (5,0) {\small nonce\_counter};
+    \node[draw, fill=nanosgreen!20, minimum width=4cm, minimum height=1cm]
+        at (9,0) {\small timestamp};
+
+    % Byte markers
+    \node[font=\tiny] at (0,-0.8) {0--1};
+    \node[font=\tiny] at (2,-0.8) {2--3};
+    \node[font=\tiny] at (5,-0.8) {4--7};
+    \node[font=\tiny] at (9,-0.8) {8--11};
+
+    % Total
+    \draw[decorate, decoration={brace, amplitude=5pt}]
+        (-1,0.7) -- (11,0.7) node[midway, above=8pt] {96 bits (12 bytes)};
+
+\end{tikzpicture}
+\caption{Estructura del nonce de 96 bits}
+\label{fig:nonce}
+\end{figure}
+
+%-------------------------------------------------------------------------------
+\chapter{Mecanismos de Confiabilidad}
+%-------------------------------------------------------------------------------
+
+\section{Máquina de Estados de Conexión}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    state/.style={draw, circle, minimum size=2cm, text centered, font=\small},
+    scale=0.8,
+    node distance=3cm
+]
+    % States
+    \node[state, fill=nanosgray!30] (closed) at (0,0) {CLOSED};
+    \node[state, align=center, fill=nanosprimary!30] (synsent) at (5,0) {SYN\\SENT};
+    \node[state, fill=nanosgreen!30] (estab) at (10,0) {ESTAB};
+    \node[state, align=center, fill=nanosaccent!30] (finsent) at (10,-4) {FIN\\SENT};
+    \node[state, align=center, fill=nanossecondary!30] (timewait) at (5,-4) {TIME\\WAIT};
+
+    % Transitions
+    \draw[arrow] (closed) -- node[above, font=\tiny] {connect()} (synsent);
+    \draw[arrow] (synsent) -- node[above, font=\tiny] {SYN+ACK} (estab);
+    \draw[arrow] (estab) -- node[right, font=\tiny] {send FIN} (finsent);
+    \draw[arrow] (finsent) -- node[below, font=\tiny] {recv ACK} (timewait);
+    \draw[arrow] (timewait) -- node[below, font=\tiny] {2*RTT} (closed);
+
+    % Timeout
+    \draw[arrow, dashed, nanosaccent] (synsent) to[bend left=30]
+        node[above, font=\tiny] {timeout} (closed);
+
+\end{tikzpicture}
+\caption{Máquina de estados de conexión NERT (simplificada)}
+\label{fig:state-machine}
+\end{figure}
+
+\section{Two-Way Handshake}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % Timeline
+    \draw[thick] (0,0) -- (0,-5);
+    \draw[thick] (8,0) -- (8,-5);
+
+    \node[above, font=\bfseries] at (0,0) {Nodo A};
+    \node[above, font=\bfseries] at (8,0) {Nodo B};
+
+    % SYN
+    \draw[arrow, thick, nanosprimary] (0.2,-1) -- (7.8,-1.8);
+    \node[above, font=\small] at (4,-1.2) {SYN, seq=X, [data]};
+
+    % SYN+ACK
+    \draw[arrow, thick, nanosgreen] (7.8,-2.2) -- (0.2,-3);
+    \node[above, font=\small] at (4,-2.4) {SYN+ACK, seq=Y, ack=X+1};
+
+    % ACK
+    \draw[arrow, thick, nanossecondary] (0.2,-3.5) -- (7.8,-4.3);
+    \node[above, font=\small] at (4,-3.7) {ACK, seq=X+1, ack=Y+1, [data]};
+
+    % Established markers
+    \node[font=\scriptsize, nanosgreen] at (0,-4.7) {ESTABLISHED};
+    \node[font=\scriptsize, nanosgreen] at (8,-4.7) {ESTABLISHED};
+
+\end{tikzpicture}
+\caption{Handshake de dos vías de NERT}
+\label{fig:handshake}
+\end{figure}
+
+\section{Selective ACK (SACK)}
+
+El SACK permite indicar eficientemente qué paquetes se han recibido:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % Received packets (green)
+    \foreach \i in {100,101,104,106} {
+        \pgfmathsetmacro{\x}{(\i-100)*1.5}
+        \node[draw, minimum width=1.2cm, minimum height=0.8cm, fill=nanosgreen!30]
+            at (\x, 0) {\small \i};
+    }
+    % Lost packets (red/accent)
+    \foreach \i in {102,103,105,107,108} {
+        \pgfmathsetmacro{\x}{(\i-100)*1.5}
+        \node[draw, minimum width=1.2cm, minimum height=0.8cm, fill=nanosaccent!30]
+            at (\x, 0) {\small \i};
+    }
+
+    % Legend
+    \node[draw, fill=nanosgreen!30, minimum width=0.5cm, minimum height=0.5cm] at (0,-1.5) {};
+    \node[right, font=\small] at (0.4,-1.5) {Recibido};
+
+    \node[draw, fill=nanosaccent!30, minimum width=0.5cm, minimum height=0.5cm] at (4,-1.5) {};
+    \node[right, font=\small] at (4.4,-1.5) {Perdido};
+
+    % SACK representation
+    \node[font=\small, anchor=west] at (0,-2.5) {SACK: base\_ack=101, bitmap=0b00101001};
+    \node[font=\small, anchor=west] at (0,-3.2) {$\rightarrow$ Indica: 101 (base), 102$\times$, 103$\times$, 104\checkmark, 105$\times$, 106\checkmark};
+
+\end{tikzpicture}
+\caption{Ejemplo de Selective ACK}
+\label{fig:sack}
+\end{figure}
+
+\section{Retransmisión con Backoff Exponencial}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm,
+        height=6cm,
+        xlabel={Intento de retransmisión},
+        ylabel={RTO (ms)},
+        xmin=0, xmax=6,
+        ymin=0, ymax=2500,
+        xtick={0,1,2,3,4,5},
+        grid=major,
+        legend pos=north west
+    ]
+
+    % RTO growth
+    \addplot[thick, nanosprimary, mark=square*] coordinates {
+        (0, 200) (1, 400) (2, 800) (3, 1600) (4, 2000) (5, 2000)
+    };
+    \addlegendentry{RTO actual}
+
+    % Max RTO line
+    \addplot[dashed, nanosaccent] coordinates {(0, 2000) (5, 2000)};
+    \addlegendentry{RTO máximo}
+
+    % Min RTO line
+    \addplot[dotted, nanosgreen] coordinates {(0, 100) (5, 100)};
+    \addlegendentry{RTO mínimo}
+
+    \end{axis}
+\end{tikzpicture}
+\caption{Crecimiento del RTO con backoff exponencial}
+\label{fig:rto-backoff}
+\end{figure}
+
+%-------------------------------------------------------------------------------
+\chapter{Forward Error Correction}
+%-------------------------------------------------------------------------------
+
+\section{Esquema XOR Parity}
+
+Para la clase CRITICAL, NERT utiliza FEC basado en XOR:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Data shards
+    \node[draw, fill=nanosprimary!30, minimum width=2cm, minimum height=1cm]
+        (d0) at (0,0) {Data 0};
+    \node[draw, fill=nanosprimary!30, minimum width=2cm, minimum height=1cm]
+        (d1) at (3,0) {Data 1};
+    \node[draw, fill=nanosprimary!30, minimum width=2cm, minimum height=1cm]
+        (d2) at (6,0) {Data 2};
+    \node[draw, fill=nanosprimary!30, minimum width=2cm, minimum height=1cm]
+        (d3) at (9,0) {Data 3};
+
+    % XOR operations
+    \node[draw, circle, fill=nanosaccent!20] (xor0) at (3,-2) {$\oplus$};
+    \node[draw, circle, fill=nanosaccent!20] (xor1) at (6,-2) {$\oplus$};
+
+    % Parity shards
+    \node[draw, fill=nanosgreen!30, minimum width=2cm, minimum height=1cm]
+        (p0) at (3,-4) {Parity 0};
+    \node[draw, fill=nanosgreen!30, minimum width=2cm, minimum height=1cm]
+        (p1) at (6,-4) {Parity 1};
+
+    % Connections
+    \draw[arrow] (d0) -- (xor0);
+    \draw[arrow] (d2) -- (xor0);
+    \draw[arrow] (d1) -- (xor1);
+    \draw[arrow] (d3) -- (xor1);
+    \draw[arrow] (xor0) -- (p0);
+    \draw[arrow] (xor1) -- (p1);
+
+    % Equations
+    \node[font=\small, anchor=west] at (11,0) {$P_0 = D_0 \oplus D_2$};
+    \node[font=\small, anchor=west] at (11,-1) {$P_1 = D_1 \oplus D_3$};
+
+    % Recovery note
+    \node[font=\small, anchor=west] at (0,-5.5) {Recuperación: $D_0 = P_0 \oplus D_2$, $D_2 = P_0 \oplus D_0$, etc.};
+
+\end{tikzpicture}
+\caption{Esquema FEC con paridad XOR}
+\label{fig:fec}
+\end{figure}
+
+\section{Capacidad de Recuperación}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Pérdida} & \textbf{Recuperable?} \\
+\midrule
+1 data shard cualquiera & \textcolor{nanosgreen}{\checkmark} Sí \\
+2 data shards (grupos diferentes) & \textcolor{nanosgreen}{\checkmark} Sí \\
+2 data shards (mismo grupo) & \textcolor{nanosaccent}{$\times$} No \\
+3+ data shards & \textcolor{nanosaccent}{$\times$} No \\
+\bottomrule
+\end{tabular}
+\caption{Capacidad de recuperación del FEC}
+\label{tab:fec-recovery}
+\end{table}
+
+%-------------------------------------------------------------------------------
+\chapter{Multi-Path Transmission}
+%-------------------------------------------------------------------------------
+
+\section{Selección de Rutas}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node/.style={draw, circle, minimum size=1.2cm, text centered, font=\small},
+    scale=0.9
+]
+    % Sender
+    \node[node, fill=nanosprimary!40] (src) at (0,0) {SRC};
+
+    % Intermediate nodes
+    \node[node, fill=nanossecondary!30] (n1) at (3,2) {N1};
+    \node[node, fill=nanossecondary!30] (n2) at (3,0) {N2};
+    \node[node, fill=nanossecondary!30] (n3) at (3,-2) {N3};
+
+    % More intermediate
+    \node[node, fill=nanosgray!30] (n4) at (6,1) {N4};
+    \node[node, fill=nanosgray!30] (n5) at (6,-1) {N5};
+
+    % Destination
+    \node[node, fill=nanosaccent!40] (dst) at (9,0) {DST};
+
+    % Paths
+    \draw[arrow, thick, nanosgreen] (src) -- (n1);
+    \draw[arrow, thick, nanosgreen] (n1) -- (n4);
+    \draw[arrow, thick, nanosgreen] (n4) -- (dst);
+
+    \draw[arrow, thick, nanosprimary] (src) -- (n2);
+    \draw[arrow, thick, nanosprimary] (n2) -- (dst);
+
+    \draw[arrow, thick, nanosaccent, dashed] (src) -- (n3);
+    \draw[arrow, thick, nanosaccent, dashed] (n3) -- (n5);
+    \draw[arrow, thick, nanosaccent, dashed] (n5) -- (dst);
+
+    % Legend
+    \node[font=\small, nanosgreen] at (4.5,3) {Path 1};
+    \node[font=\small, nanosprimary] at (4.5,2.5) {Path 2};
+    \node[font=\small, nanosaccent] at (4.5,2) {Path 3};
+
+\end{tikzpicture}
+\caption{Transmisión multi-path con rutas diversas}
+\label{fig:multipath}
+\end{figure}
+
+%===============================================================================
+% PART III: Implementation Guide
+%===============================================================================
+\part{Guía de Implementación}
+
+%-------------------------------------------------------------------------------
+\chapter{Compilación y Despliegue}
+%-------------------------------------------------------------------------------
+
+\section{Requisitos}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Componente} & \textbf{Versión Mínima} \\
+\midrule
+GCC (x86) & 9.0 \\
+ARM GCC & arm-none-eabi-gcc 10.0 \\
+QEMU & 6.0 \\
+PlatformIO & 6.0 (para ESP32) \\
+Make & 4.0 \\
+\bottomrule
+\end{tabular}
+\caption{Requisitos de compilación}
+\label{tab:requirements}
+\end{table}
+
+\section{Compilación x86}
+
+\begin{lstlisting}[language=bash, caption={Compilación para QEMU x86}]
+# Compilar kernel
+make clean
+make PLATFORM=x86
+
+# Ejecutar en QEMU (3 nodos)
+./scripts/run_swarm.sh 3
+\end{lstlisting}
+
+\section{Compilación ARM}
+
+\begin{lstlisting}[language=bash, caption={Compilación para ARM Cortex-M3}]
+# Compilar para Stellaris
+make PLATFORM=arm
+
+# Ejecutar en QEMU
+qemu-system-arm -M lm3s6965evb \
+    -kernel build/nanos_arm.elf \
+    -nographic
+\end{lstlisting}
+
+\section{Compilación ESP32}
+
+\begin{lstlisting}[language=bash, caption={Compilación con PlatformIO}]
+cd platforms/esp32
+pio run -e esp32dev
+
+# Flash al dispositivo
+pio run -t upload
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{API de Programación}
+%-------------------------------------------------------------------------------
+
+\section{Inicialización}
+
+\begin{lstlisting}[caption={Inicialización típica de NERT}]
+#include "nert.h"
+#include "nanos.h"
+
+void handle_pheromone(uint16_t sender, uint8_t type,
+                      const void *data, uint8_t len) {
+    switch (type) {
+        case PHEROMONE_HELLO:
+            neighbor_update(sender, data);
+            break;
+        case PHEROMONE_QUEEN_CMD:
+            execute_command(data);
+            break;
+        // ... otros tipos
+    }
+}
+
+void kernel_main(void) {
+    hal_init();
+    nert_init();
+    nert_set_receive_callback(handle_pheromone);
+
+    while (1) {
+        nert_process_incoming();
+        nert_timer_tick();
+        nert_check_key_rotation();
+
+        // Logica de aplicacion
+        process_role_logic();
+
+        hal_cpu_idle();
+    }
+}
+\end{lstlisting}
+
+\section{Envío de Mensajes}
+
+\begin{lstlisting}[caption={Ejemplos de envío con diferentes clases}]
+// Telemetria frecuente (no garantizada)
+struct sensor_data sensor = {.temp = 25, .humidity = 60};
+nert_send_unreliable(0, PHEROMONE_SENSOR, &sensor, sizeof(sensor));
+
+// Datos importantes (con retry)
+struct kv_pair kv = {.key = "status", .value = "active"};
+nert_send_best_effort(dest_id, PHEROMONE_KV_SET, &kv, sizeof(kv));
+
+// Comando que requiere ACK
+struct task_cmd task = {.action = ACTION_EXPLORE, .area = 5};
+int conn = nert_send_reliable(worker_id, PHEROMONE_TASK,
+                              &task, sizeof(task));
+
+// Comando critico (FEC + multipath)
+struct die_cmd die = {.target = rogue_node, .reason = SECURITY};
+nert_send_critical(target_id, PHEROMONE_DIE, &die, sizeof(die));
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{Debugging y Monitoreo}
+%-------------------------------------------------------------------------------
+
+\section{Estadísticas de NERT}
+
+\begin{lstlisting}[caption={Acceso a estadísticas de protocolo}]
+const struct nert_stats *stats = nert_get_stats();
+
+printf("TX: %lu packets, %lu bytes\n",
+       stats->tx_packets, stats->tx_bytes);
+printf("RX: %lu packets, %lu duplicates\n",
+       stats->rx_packets, stats->rx_duplicates);
+printf("Retransmits: %lu\n", stats->tx_retransmits);
+printf("Bad MAC: %lu, Replay blocked: %lu\n",
+       stats->rx_bad_mac, stats->rx_replay_blocked);
+printf("RTT: avg=%u, min=%u, max=%u\n",
+       stats->avg_rtt, stats->min_rtt, stats->max_rtt);
+\end{lstlisting}
+
+\section{Métricas Clave}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Métrica} & \textbf{Valor Normal} & \textbf{Alerta Si} \\
+\midrule
+Duplicates/RX & $<$ 5\% & $>$ 20\% \\
+Bad MAC rate & $<$ 0.1\% & $>$ 1\% \\
+Retransmit rate & $<$ 10\% & $>$ 30\% \\
+Avg RTT & $<$ 100ms & $>$ 500ms \\
+Connection timeouts & 0 & $>$ 5/min \\
+\bottomrule
+\end{tabular}
+\caption{Umbrales de métricas para monitoreo}
+\label{tab:metrics}
+\end{table}
+
+%===============================================================================
+% Appendices
+%===============================================================================
+\appendix
+
+\chapter{Constantes de Configuración}
+
+\begin{longtable}{llp{6cm}}
+\toprule
+\textbf{Constante} & \textbf{Valor} & \textbf{Descripción} \\
+\midrule
+\endhead
+
+\multicolumn{3}{c}{\textit{Continúa en la siguiente página...}} \\
+\endfoot
+
+\bottomrule
+\endlastfoot
+
+NERT\_MAGIC & 0x4E & Byte mágico ('N') \\
+NERT\_VERSION & 0x10 & Versión del protocolo \\
+NERT\_KEY\_SIZE & 32 & Tamaño de clave en bytes \\
+NERT\_NONCE\_SIZE & 12 & Tamaño de nonce en bytes \\
+NERT\_MAC\_SIZE & 8 & Tamaño de tag MAC \\
+NERT\_MAX\_CONNECTIONS & 4--8 & Conexiones simultáneas \\
+NERT\_WINDOW\_SIZE & 2--4 & Tamaño de ventana TX \\
+NERT\_RETRY\_TIMEOUT\_MS & 200 & Timeout inicial \\
+NERT\_MAX\_RETRIES & 5 & Reintentos (RELIABLE) \\
+NERT\_MAX\_RETRIES\_CRITICAL & 10 & Reintentos (CRITICAL) \\
+NERT\_KEY\_ROTATION\_SEC & 3600 & Rotación de clave (1h) \\
+NERT\_KEY\_GRACE\_WINDOW\_MS & 30000 & Ventana de gracia (30s) \\
+BLOOM\_BITS & 256 & Bits del Bloom filter \\
+BLOOM\_SLOTS & 4 & Slots rotativos \\
+BLOOM\_WINDOW\_MS & 500 & Ventana por slot \\
+MAX\_CELL\_LIFETIME & 3600000 & Vida máxima del nodo (ms) \\
+HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
+
+\caption{Constantes de configuración de NanOS/NERT}
+\label{tab:constants}
+\end{longtable}
+
+\chapter{Glosario}
+
+\begin{description}[style=nextline]
+    \item[Apoptosis] Muerte celular programada. En NanOS, el proceso por el
+        cual un nodo termina su ejecución de forma controlada.
+
+    \item[Bloom Filter] Estructura de datos probabilística para pruebas de
+        membresía con eficiencia de espacio.
+
+    \item[Época (Epoch)] Período de tiempo durante el cual una clave de
+        sesión es válida (por defecto: 1 hora).
+
+    \item[FEC] Forward Error Correction. Técnica para recuperar datos
+        perdidos sin retransmisión.
+
+    \item[Gradiente] Campo escalar que indica la distancia a la reina,
+        usado para enrutamiento.
+
+    \item[Gossip Protocol] Protocolo de diseminación epidémica de información.
+
+    \item[Grace Window] Período en límites de época donde se aceptan
+        claves de épocas adyacentes.
+
+    \item[HMAC] Hash-based Message Authentication Code.
+
+    \item[Nodo Desechable] Nodo diseñado con vida útil limitada que
+        regenera al morir.
+
+    \item[NERT] NanOS Ephemeral Reliable Transport.
+
+    \item[Pheromone] Mensaje de comunicación entre nodos del enjambre.
+
+    \item[SACK] Selective Acknowledgment.
+
+    \item[Swarm] Conjunto de nodos comunicándose colectivamente.
+\end{description}
+
+%-------------------------------------------------------------------------------
+% Back Matter
+%-------------------------------------------------------------------------------
+
+\backmatter
+
+\chapter*{Sobre Este Documento}
+\addcontentsline{toc}{chapter}{Sobre Este Documento}
+
+Este manual técnico fue generado como parte del proyecto NanOS v0.3.
+Cubre la arquitectura del sistema operativo y el protocolo NERT diseñado
+específicamente para comunicación entre nodos desechables.
+
+\vspace{1cm}
+
+\begin{center}
+\begin{tikzpicture}
+    \node[draw, rounded corners, fill=nanosprimary!10,
+          minimum width=8cm, minimum height=2cm] {
+        \begin{tabular}{c}
+            \textbf{NanOS Project}\\
+            \small Los nodos mueren, el enjambre vive.\\
+            \small 2026
+        \end{tabular}
+    };
+\end{tikzpicture}
+\end{center}
+
+\end{document}

@@ -1,0 +1,39 @@
+\babel@toc {spanish}{}\relax 
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {1.1}{\ignorespaces Analogía biológica de NanOS}}{11}{figure.caption.4}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Arquitectura de capas de NanOS}}{13}{figure.caption.6}%
+\contentsline {figure}{\numberline {2.2}{\ignorespaces Ciclo de vida de un nodo NanOS}}{14}{figure.caption.7}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Sistema de roles en el enjambre}}{15}{figure.caption.8}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Fases del algoritmo de elección}}{16}{figure.caption.10}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Estructura del paquete pheromone estándar}}{17}{figure.caption.12}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Proceso de generación de HMAC}}{18}{figure.caption.13}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Visualización del Bloom filter con slots rotativos}}{19}{figure.caption.14}%
+\contentsline {figure}{\numberline {5.2}{\ignorespaces Decaimiento de probabilidad en el protocolo gossip}}{20}{figure.caption.15}%
+\contentsline {figure}{\numberline {5.3}{\ignorespaces Enrutamiento por gradiente hacia la reina}}{20}{figure.caption.16}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Clases de confiabilidad de NERT}}{23}{figure.caption.18}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces Header NERT estándar de 20 bytes}}{25}{figure.caption.19}%
+\contentsline {figure}{\numberline {7.2}{\ignorespaces Estructura completa del paquete NERT}}{26}{figure.caption.21}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {8.1}{\ignorespaces Proceso de derivación de clave de sesión}}{27}{figure.caption.23}%
+\contentsline {figure}{\numberline {8.2}{\ignorespaces Mecanismo de ventana de gracia para rotación de claves}}{28}{figure.caption.24}%
+\contentsline {figure}{\numberline {8.3}{\ignorespaces Estructura del nonce de 96 bits}}{28}{figure.caption.25}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {9.1}{\ignorespaces Máquina de estados de conexión NERT (simplificada)}}{29}{figure.caption.26}%
+\contentsline {figure}{\numberline {9.2}{\ignorespaces Handshake de dos vías de NERT}}{29}{figure.caption.27}%
+\contentsline {figure}{\numberline {9.3}{\ignorespaces Ejemplo de Selective ACK}}{30}{figure.caption.28}%
+\contentsline {figure}{\numberline {9.4}{\ignorespaces Crecimiento del RTO con backoff exponencial}}{30}{figure.caption.29}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {10.1}{\ignorespaces Esquema FEC con paridad XOR}}{31}{figure.caption.30}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {11.1}{\ignorespaces Transmisión multi-path con rutas diversas}}{33}{figure.caption.32}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
