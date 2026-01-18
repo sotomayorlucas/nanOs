@@ -722,22 +722,69 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 | DoS flooding | Bloom filter + gossip decay existentes |
 | Man-in-the-middle | Requiere conocer SWARM_MASTER_KEY |
 
-### 10.2 Rotación de Claves
+### 10.2 Rotación de Claves con Ventana de Gracia
+
+**Problema**: Sin sincronización de tiempo, nodos con relojes ligeramente desincronizados
+podrían rechazar paquetes válidos justo en el cambio de época.
+
+**Solución**: Mantener tres claves derivadas (anterior, actual, siguiente) y aceptar
+cualquiera de ellas durante una ventana de gracia en los límites de época.
+
+```
+     Época N-1          │          Época N          │         Época N+1
+                        │                           │
+ ──────────────────────►│◄─────────────────────────►│◄──────────────────────
+                        │                           │
+              ┌─────────┼─────────┐       ┌─────────┼─────────┐
+              │  Grace  │  Grace  │       │  Grace  │  Grace  │
+              │ Window  │ Window  │       │ Window  │ Window  │
+              │  (30s)  │  (30s)  │       │  (30s)  │  (30s)  │
+              └─────────┼─────────┘       └─────────┼─────────┘
+                        │                           │
+  Acepta: key[N-1]      │ Acepta: key[N-1], key[N]  │ Acepta: key[N], key[N+1]
+                        │                           │
+```
 
 ```c
-/* Clave de sesión rota cada hora (coincide con MAX_CELL_LIFETIME) */
-#define KEY_ROTATION_INTERVAL_SEC   3600
+#define KEY_ROTATION_INTERVAL_SEC   3600    /* 1 hora */
+#define GRACE_WINDOW_MS             30000   /* 30 segundos de gracia */
+
+/* Claves para épocas adyacentes */
+static uint8_t session_key[32];       /* Época actual */
+static uint8_t prev_session_key[32];  /* Época anterior */
+static uint8_t next_session_key[32];  /* Época siguiente (pre-calculada) */
 
 void nert_check_key_rotation(void) {
-    uint32_t current_hour = hal_timer_ticks() / (1000 * KEY_ROTATION_INTERVAL_SEC);
+    uint32_t current_epoch = hal_timer_ticks() / (1000 * KEY_ROTATION_INTERVAL_SEC);
 
-    if (current_hour != last_key_epoch) {
-        nert_derive_session_key(swarm_state.node_id, current_hour,
-                               current_session_key);
-        last_key_epoch = current_hour;
+    if (current_epoch != last_key_epoch) {
+        /* Derivar las tres claves */
+        derive_key_for_epoch(current_epoch - 1, prev_session_key);
+        derive_key_for_epoch(current_epoch, session_key);
+        derive_key_for_epoch(current_epoch + 1, next_session_key);
+        last_key_epoch = current_epoch;
     }
 }
+
+/* En verificación de MAC: probar con claves válidas según posición en época */
+uint8_t get_valid_key_mask(void) {
+    uint32_t pos_in_epoch = hal_timer_ticks() % (KEY_ROTATION_INTERVAL_SEC * 1000);
+    uint8_t mask = 0x01;  /* Clave actual siempre válida */
+
+    if (pos_in_epoch < GRACE_WINDOW_MS)
+        mask |= 0x02;  /* Aceptar clave anterior */
+
+    if (pos_in_epoch > (KEY_ROTATION_INTERVAL_SEC * 1000 - GRACE_WINDOW_MS))
+        mask |= 0x04;  /* Aceptar clave siguiente */
+
+    return mask;
+}
 ```
+
+**Beneficios**:
+- Tolera hasta 30 segundos de drift entre nodos
+- Sin sincronización de tiempo requerida
+- Overhead mínimo: 64 bytes extra de RAM para claves adicionales
 
 ### 10.3 Protección Anti-Replay
 

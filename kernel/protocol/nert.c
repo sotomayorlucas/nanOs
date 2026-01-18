@@ -22,9 +22,18 @@ static uint8_t swarm_master_key[NERT_KEY_SIZE] = {
     0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
 };
 
-/* Session key (derived per hour) */
-static uint8_t session_key[NERT_KEY_SIZE];
+/* Session keys with grace window for epoch transitions */
+static uint8_t session_key[NERT_KEY_SIZE];          /* Current epoch key */
+static uint8_t prev_session_key[NERT_KEY_SIZE];     /* Previous epoch key */
+static uint8_t next_session_key[NERT_KEY_SIZE];     /* Next epoch key (pre-computed) */
 static uint32_t last_key_epoch = 0;
+
+/*
+ * Grace window configuration:
+ * - NERT_KEY_GRACE_WINDOW_MS: Accept keys from adjacent epochs within this window
+ * - Handles clock drift between nodes without time synchronization
+ * - Defined in nert.h (default: 30 seconds)
+ */
 
 /* Connections */
 static struct nert_connection connections[NERT_MAX_CONNECTIONS];
@@ -233,25 +242,69 @@ static int poly1305_verify(const uint8_t key[32],
  * Key Derivation
  * ============================================================================ */
 
-static void derive_session_key(uint32_t epoch_hour) {
+static void derive_key_for_epoch(uint32_t epoch_hour, uint8_t out_key[NERT_KEY_SIZE]) {
     uint8_t material[40];
-    uint16_t node_id = nert_hal_get_node_id();
 
+    /*
+     * Key material: master_key || zeros || epoch
+     * Note: We don't include node_id in key derivation - all nodes must
+     * derive the SAME key for a given epoch to communicate.
+     */
     memcpy(material, swarm_master_key, 32);
-    material[32] = (node_id >> 8) & 0xFF;
-    material[33] = node_id & 0xFF;
-    material[34] = (epoch_hour >> 24) & 0xFF;
-    material[35] = (epoch_hour >> 16) & 0xFF;
-    material[36] = (epoch_hour >> 8) & 0xFF;
-    material[37] = epoch_hour & 0xFF;
-    material[38] = 0x4E; /* 'N' */
-    material[39] = 0x45; /* 'E' */
+    material[32] = (epoch_hour >> 24) & 0xFF;
+    material[33] = (epoch_hour >> 16) & 0xFF;
+    material[34] = (epoch_hour >> 8) & 0xFF;
+    material[35] = epoch_hour & 0xFF;
+    material[36] = 0x4E; /* 'N' */
+    material[37] = 0x45; /* 'E' */
+    material[38] = 0x52; /* 'R' */
+    material[39] = 0x54; /* 'T' */
 
-    /* Simple key derivation using ChaCha8 */
+    /* Key derivation using ChaCha8 as PRF */
     uint8_t nonce[12] = {0};
-    chacha8_encrypt(swarm_master_key, nonce, material, 32, session_key);
+    chacha8_encrypt(swarm_master_key, nonce, material, 32, out_key);
+}
+
+static void derive_session_key(uint32_t epoch_hour) {
+    /* Derive keys for current, previous and next epochs */
+    derive_key_for_epoch(epoch_hour, session_key);
+
+    if (epoch_hour > 0) {
+        derive_key_for_epoch(epoch_hour - 1, prev_session_key);
+    } else {
+        memset(prev_session_key, 0, NERT_KEY_SIZE);
+    }
+
+    derive_key_for_epoch(epoch_hour + 1, next_session_key);
 
     last_key_epoch = epoch_hour;
+}
+
+/*
+ * Check if we're within the grace window at epoch boundaries.
+ * Returns a bitmask of valid key indices to try:
+ *   Bit 0: current key
+ *   Bit 1: previous key (if near start of epoch)
+ *   Bit 2: next key (if near end of epoch)
+ */
+static uint8_t get_valid_key_mask(void) {
+    uint32_t ticks = nert_hal_get_ticks();
+    uint32_t epoch_ms = NERT_KEY_ROTATION_SEC * 1000;
+    uint32_t position_in_epoch = ticks % epoch_ms;
+
+    uint8_t mask = 0x01; /* Current key always valid */
+
+    /* Near start of epoch? Accept previous key */
+    if (position_in_epoch < NERT_KEY_GRACE_WINDOW_MS) {
+        mask |= 0x02;
+    }
+
+    /* Near end of epoch? Accept next key */
+    if (position_in_epoch > (epoch_ms - NERT_KEY_GRACE_WINDOW_MS)) {
+        mask |= 0x04;
+    }
+
+    return mask;
 }
 
 /* ============================================================================
@@ -448,12 +501,38 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     stats.rx_bytes += len;
 
     uint8_t payload_len = pkt->header.payload_len;
-
-    /* Verify MAC */
     uint8_t *tag_ptr = raw_data + NERT_HEADER_SIZE + payload_len;
+
+    /*
+     * Verify MAC with grace window support.
+     * Try current key first, then adjacent epoch keys if within grace window.
+     * This handles clock drift between nodes at epoch boundaries.
+     */
+    uint8_t key_mask = get_valid_key_mask();
+    const uint8_t *valid_key = NULL;
+
+    /* Try current epoch key (always valid) */
     if (poly1305_verify(session_key, pkt->payload, payload_len,
                         (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
-                        tag_ptr) != 0) {
+                        tag_ptr) == 0) {
+        valid_key = session_key;
+    }
+    /* Try previous epoch key (if in grace window at start of epoch) */
+    else if ((key_mask & 0x02) &&
+             poly1305_verify(prev_session_key, pkt->payload, payload_len,
+                            (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
+                            tag_ptr) == 0) {
+        valid_key = prev_session_key;
+    }
+    /* Try next epoch key (if in grace window at end of epoch) */
+    else if ((key_mask & 0x04) &&
+             poly1305_verify(next_session_key, pkt->payload, payload_len,
+                            (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
+                            tag_ptr) == 0) {
+        valid_key = next_session_key;
+    }
+
+    if (!valid_key) {
         stats.rx_bad_mac++;
         return;
     }
@@ -464,12 +543,12 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
         return;
     }
 
-    /* Decrypt payload */
+    /* Decrypt payload using the key that verified successfully */
     uint8_t nonce[NERT_NONCE_SIZE];
     uint8_t plaintext[NERT_MAX_PAYLOAD + 1];
 
     build_nonce(nonce, pkt->header.nonce_counter);
-    chacha8_encrypt(session_key, nonce, pkt->payload, payload_len, plaintext);
+    chacha8_encrypt(valid_key, nonce, pkt->payload, payload_len, plaintext);
 
     uint8_t pheromone_type = plaintext[0];
     uint8_t *data = plaintext + 1;

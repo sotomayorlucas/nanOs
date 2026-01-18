@@ -49,6 +49,7 @@ extern "C" {
 #define NERT_MAX_RETRIES_CRITICAL   10
 #define NERT_CONNECTION_TIMEOUT_MS  30000
 #define NERT_KEY_ROTATION_SEC       3600
+#define NERT_KEY_GRACE_WINDOW_MS    30000   /* Grace window for clock drift */
 
 /* Crypto constants */
 #define NERT_CHACHA_ROUNDS          8
