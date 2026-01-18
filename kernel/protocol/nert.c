@@ -35,10 +35,11 @@ static uint8_t swarm_master_key[NERT_KEY_SIZE] = {
 };
 
 /* Session keys with grace window for epoch transitions */
-static uint8_t session_key[NERT_KEY_SIZE];          /* Current epoch key */
-static uint8_t prev_session_key[NERT_KEY_SIZE];     /* Previous epoch key */
-static uint8_t next_session_key[NERT_KEY_SIZE];     /* Next epoch key (pre-computed) */
-static uint32_t last_key_epoch = 0;
+/* Non-static for use by nert_security.c (key rotation) */
+uint8_t session_key[NERT_KEY_SIZE];          /* Current epoch key */
+uint8_t prev_session_key[NERT_KEY_SIZE];     /* Previous epoch key */
+uint8_t next_session_key[NERT_KEY_SIZE];     /* Next epoch key (pre-computed) */
+uint32_t last_key_epoch = 0;
 
 /*
  * Grace window configuration:
@@ -149,9 +150,10 @@ static void chacha8_block(const uint32_t key[8], const uint32_t nonce[3],
     }
 }
 
-static void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
-                            const uint8_t *plaintext, uint8_t len,
-                            uint8_t *ciphertext) {
+/* Non-static for use by nert_security.c (key rotation encryption) */
+void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                     const uint8_t *plaintext, uint8_t len,
+                     uint8_t *ciphertext) {
     uint32_t key32[8];
     uint32_t nonce32[3];
     uint8_t keystream[64];
@@ -193,10 +195,11 @@ static void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
  * ============================================================================ */
 
 /* Poly1305 uses 130-bit arithmetic - simplified for embedded */
-static void poly1305_mac(const uint8_t key[32],
-                         const uint8_t *message, uint8_t msg_len,
-                         const uint8_t *aad, uint8_t aad_len,
-                         uint8_t tag[NERT_MAC_SIZE]) {
+/* Non-static for use by nert_security.c (key rotation signing) */
+void poly1305_mac(const uint8_t key[32],
+                  const uint8_t *message, uint8_t msg_len,
+                  const uint8_t *aad, uint8_t aad_len,
+                  uint8_t tag[NERT_MAC_SIZE]) {
     /*
      * Simplified Poly1305: Use lower 64 bits of result
      * Full implementation would need 130-bit math
@@ -234,10 +237,11 @@ static void poly1305_mac(const uint8_t key[32],
     }
 }
 
-static int poly1305_verify(const uint8_t key[32],
-                           const uint8_t *message, uint8_t msg_len,
-                           const uint8_t *aad, uint8_t aad_len,
-                           const uint8_t expected_tag[NERT_MAC_SIZE]) {
+/* Non-static for use by nert_security.c (key rotation verification) */
+int poly1305_verify(const uint8_t key[32],
+                    const uint8_t *message, uint8_t msg_len,
+                    const uint8_t *aad, uint8_t aad_len,
+                    const uint8_t expected_tag[NERT_MAC_SIZE]) {
     uint8_t computed_tag[NERT_MAC_SIZE];
     poly1305_mac(key, message, msg_len, aad, aad_len, computed_tag);
 
@@ -277,7 +281,8 @@ static void derive_key_for_epoch(uint32_t epoch_hour, uint8_t out_key[NERT_KEY_S
     chacha8_encrypt(swarm_master_key, nonce, material, 32, out_key);
 }
 
-static void derive_session_key(uint32_t epoch_hour) {
+/* Non-static for use by nert_security.c (key rotation key derivation) */
+void derive_session_key(uint32_t epoch_hour) {
     /* Derive keys for current, previous and next epochs */
     derive_key_for_epoch(epoch_hour, session_key);
 

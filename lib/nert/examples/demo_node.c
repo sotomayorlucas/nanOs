@@ -1,6 +1,6 @@
 /*
  * NERT Framework Demo - Secure Node Example
- * Demonstrates the v0.4 framework API
+ * Demonstrates the v0.4 framework API with full NERT protocol
  *
  * Copyright (c) 2026 NanOS Project
  * SPDX-License-Identifier: MIT
@@ -9,6 +9,7 @@
 #include "../nert_phy_if.h"
 #include "../nert_config.h"
 #include "../nert_security.h"
+#include "../hal/hal_adapter.h"
 #include "../../include/nert.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -174,8 +175,11 @@ int main(int argc, char **argv) {
     config.security.enable_replay_protection = 1;
     config.security.enable_key_rotation = 1;
 
-    /* TODO: Initialize NERT with new config API
-     * For now, use legacy init */
+    /* Initialize HAL adapter - bridges PHY with NERT protocol */
+    printf("[Node %04X] Initializing HAL adapter...\n", my_node_id);
+    nert_hal_adapter_init(phy, my_node_id);
+
+    /* Initialize NERT protocol stack */
     printf("[Node %04X] Initializing NERT stack...\n", my_node_id);
     nert_init();
     nert_set_master_key(demo_master_key);
@@ -183,14 +187,18 @@ int main(int argc, char **argv) {
     /* Register payload constraints for custom messages */
     nert_security_register_constraints(PHEROMONE_ALARM, 4, 32, 0);
 
-    printf("[Node %04X] READY - Listening for packets...\n\n", my_node_id);
+    printf("[Node %04X] READY - Using NERT protocol over UDP multicast\n", my_node_id);
+    printf("[Node %04X] All traffic encrypted with ChaCha8+Poly1305\n\n", my_node_id);
 
     /* Main loop */
     uint32_t last_announce = 0;
     uint32_t announce_interval = 5000;  /* 5 seconds */
 
     while (running) {
-        /* Process incoming packets */
+        /* Update HAL tick counter (for gossip/bloom filters) */
+        nert_hal_update_ticks();
+
+        /* Process incoming NERT packets */
         nert_process_incoming();
 
         /* Timer tick for retransmissions */
@@ -199,15 +207,16 @@ int main(int argc, char **argv) {
         /* Check key rotation */
         nert_check_key_rotation();
 
-        /* Periodic announce */
-        uint32_t now = phy->get_ticks(phy->context);
+        /* Periodic announce using NERT protocol */
+        uint32_t now = nert_hal_get_ticks();
         if (now - last_announce > announce_interval) {
-            printf("[Node %04X] Sending announce...\n", my_node_id);
+            printf("[Node %04X] Sending NERT announce (encrypted)...\n", my_node_id);
 
             uint8_t announce_data[8];
             memcpy(announce_data, &my_node_id, 2);
             memcpy(announce_data + 2, &now, 4);
 
+            /* Send via NERT protocol (will be encrypted automatically) */
             nert_send_unreliable(0, PHEROMONE_ANNOUNCE, announce_data, 6);
             last_announce = now;
         }
