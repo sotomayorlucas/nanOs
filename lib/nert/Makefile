@@ -26,7 +26,8 @@ CORE_SOURCES := \
 	nert_security.c
 
 HAL_SOURCES := \
-	hal/hal_virtual.c
+	hal/hal_virtual.c \
+	hal/hal_adapter.c
 
 # For now, we'll use the existing nert.c from kernel/protocol
 # In a full refactor, we'd move it here
