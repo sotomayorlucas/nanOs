@@ -1,24 +1,31 @@
-# NanOS v0.2
+# NanOS v0.3
 
-**A Reactive Unikernel for Swarm Intelligence - Now with Immunity**
+**A Reactive Unikernel for Swarm Intelligence - Multi-Architecture**
 
-NanOS is a minimal bare-metal operating system designed to run on thousands of disposable nodes that communicate via broadcast protocols to form a collective hive mind.
+NanOS is a minimal bare-metal operating system designed to run on thousands of disposable nodes that communicate via broadcast protocols to form a collective hive mind. Now supports x86, ARM Cortex-M3, and ESP32.
 
-## What's New in v0.2
+## What's New in v0.3
 
-- **Gossip Protocol**: Probabilistic message relay prevents broadcast storms
-- **HMAC Authentication**: Critical commands require cryptographic signatures
-- **Cell Roles**: Workers, Explorers, Sentinels, and Queens with different behaviors
-- **Apoptosis**: Programmed cell death and rebirth when memory exhausted
-- **Non-blocking TX**: Software queue with exponential backoff
-- **Swarm Observer**: Python tool for real-time visualization
+- **ARM Cortex-M3 Support**: Run swarms on QEMU ARM (lm3s6965evb Stellaris)
+- **Modular Architecture**: Maze and terrain exploration as separate modules
+- **Tactical Dashboard**: Web-based command center with ARM swarm control
+- **ESP32 Support**: PlatformIO project for real hardware swarms
+- **24-byte Compact Protocol**: Optimized packet format for embedded devices
+
+## Supported Platforms
+
+| Platform | Architecture | Network | Status |
+|----------|-------------|---------|--------|
+| x86 QEMU | i386 | e1000 NIC | Production |
+| ARM QEMU | Cortex-M3 | Stellaris Ethernet | Production |
+| ESP32 | Xtensa | WiFi/ESP-NOW | Experimental |
 
 ## Philosophy
 
 - **Biology over Bureaucracy**: No scheduler, no userspace, no permissions, no filesystem. The kernel is a cell reacting to stimuli.
 - **Organized Chaos**: No static IPs, no TCP connections. Everything is broadcast/multicast.
 - **Ephemeral**: Memory is volatile. State is maintained by message recirculation (gossip), not disk storage.
-- **Silent by Default**: If there are no events, the CPU sleeps (`hlt`).
+- **Silent by Default**: If there are no events, the CPU sleeps (`hlt` / `wfi`).
 - **Immune System**: Authenticate before you trust. Verify before you obey.
 
 ## Architecture
@@ -26,185 +33,237 @@ NanOS is a minimal bare-metal operating system designed to run on thousands of d
 ```
 nanOs/
 ├── boot/
-│   └── boot.asm          # Multiboot2 header + entry point
+│   └── boot.asm              # x86 Multiboot2 header + entry point
 ├── kernel/
-│   └── kernel.c          # Main reactive loop with gossip & apoptosis
+│   └── kernel.c              # Main x86 reactive loop (modular)
+├── arch/
+│   └── arm-qemu/
+│       ├── startup.c         # ARM Cortex-M3 vector table & startup
+│       ├── nanos_arm.c       # ARM kernel with ethernet
+│       ├── modules.h         # Shared module interfaces
+│       ├── maze_arm.c        # Maze exploration module
+│       ├── terrain_arm.c     # Terrain exploration module
+│       └── lm3s6965.ld       # ARM linker script
+├── platformio/
+│   └── nanos_swarm/          # ESP32 PlatformIO project
 ├── drivers/
-│   └── e1000_minimal.c   # Intel e1000 NIC driver (non-blocking TX)
+│   └── e1000_minimal.c       # Intel e1000 NIC driver
 ├── include/
-│   ├── nanos.h           # Core types, security, gossip structures
-│   ├── io.h              # Port I/O functions
-│   └── e1000.h           # NIC driver header
+│   ├── nanos.h               # Core types, security, gossip
+│   ├── io.h                  # Port I/O functions
+│   └── e1000.h               # NIC driver header
+├── dashboard/
+│   └── nanos_dashboard.py    # Web-based tactical command center
 ├── tools/
-│   └── swarm_observer.py # Real-time swarm visualization
-├── linker.ld             # Linker script (loads at 1MB)
-└── Makefile              # Build system
+│   └── swarm_observer.py     # CLI swarm visualization
+├── linker.ld                 # x86 linker script
+└── Makefile                  # Build system
 ```
 
-## The Pheromone Protocol v0.2
+## The Pheromone Protocol
 
-Nodes communicate via 64-byte "pheromone" packets:
-
+### x86 Format (64 bytes)
 ```c
-struct nanos_pheromone {  // 64 bytes
+struct nanos_pheromone {
     uint32_t magic;       // 0x4E414E4F ("NANO")
     uint32_t node_id;     // Random ID assigned at boot
-    uint8_t  type;        // HELLO, DATA, ALARM, QUEEN_CMD, DIE, REBIRTH
+    uint8_t  type;        // Message type
     uint8_t  ttl;         // Hops remaining
     uint8_t  flags;       // Bit 0: authenticated, Bits 1-3: role
     uint8_t  version;     // Protocol version (0x02)
-    uint32_t seq;         // Sequence number for deduplication
-    uint8_t  hmac[8];     // Truncated HMAC for critical messages
+    uint32_t seq;         // Sequence number
+    uint8_t  hmac[8];     // Truncated HMAC
     uint8_t  payload[40]; // Data
 };
 ```
 
-**Pheromone Types:**
+### ARM Compact Format (24 bytes)
+```c
+typedef struct __attribute__((packed)) {
+    uint8_t  magic;       // 0xAA
+    uint16_t node_id;     // 16-bit node ID
+    uint8_t  type;        // Message type
+    uint8_t  ttl_flags;   // TTL (4 bits) + flags (4 bits)
+    uint8_t  seq;         // Sequence number
+    uint16_t dest_id;     // Destination (0xFFFF = broadcast)
+    uint8_t  dist_hop;    // Distance/hop count
+    uint8_t  payload[8];  // Compact payload
+    uint8_t  hmac[4];     // 4-byte HMAC
+    uint8_t  reserved[3]; // Padding
+} arm_packet_t;
+```
+
+## Pheromone Types
+
 | Type | Code | Description | Auth Required |
 |------|------|-------------|---------------|
-| HELLO | 0x01 | Heartbeat - "I exist" | No |
-| DATA | 0x02 | Information payload | No |
-| ALARM | 0x03 | Danger detected (propagates) | No |
+| HELLO | 0x01 | Heartbeat | No |
+| DATA | 0x02 | Information | No |
+| ALARM | 0x03 | Danger alert | No |
 | ECHO | 0x04 | Acknowledgment | No |
-| QUEEN_CMD | 0x10 | Command from queen | **Yes** |
-| REBIRTH | 0xFE | Cell death notification | **Yes** |
+| QUEEN_CMD | 0x10 | Queen command | **Yes** |
+| MAZE_INIT | 0x70 | Start maze exploration | No |
+| MAZE_MOVE | 0x71 | Maze movement | No |
+| MAZE_SOLVED | 0x73 | Maze solved | No |
+| TERRAIN_INIT | 0x80 | Start terrain exploration | No |
+| TERRAIN_REPORT | 0x81 | Terrain discovery | No |
+| TERRAIN_THREAT | 0x82 | Threat detected | No |
+| REBIRTH | 0xFE | Cell death | **Yes** |
 | DIE | 0xFF | Kill command | **Yes** |
 
 ## Cell Roles
 
-Nodes differentiate at boot based on random selection:
-
 | Role | Probability | Heartbeat | Behavior |
 |------|-------------|-----------|----------|
-| **WORKER** | ~75% | 1.0s | Default: process data, relay messages |
+| **WORKER** | ~75% | 1.0s | Process data, relay messages |
 | **EXPLORER** | ~12.5% | 0.5s | Fast discovery, frequent heartbeats |
-| **SENTINEL** | ~12.5% | 2.0s | Monitor anomalies, log all contacts |
-| **QUEEN** | ~0.4% | 3.0s | Can issue authenticated commands |
+| **SENTINEL** | ~12.5% | 2.0s | Monitor anomalies, log contacts |
+| **QUEEN** | ~0.4% | 3.0s | Issue authenticated commands |
 
-## Security (Immune System)
+## Building & Running
 
-Critical commands (DIE, QUEEN_CMD, REBIRTH) require:
-
-1. **FLAG_AUTHENTICATED** bit set in flags
-2. **Valid HMAC** computed with shared swarm secret
-3. **Role verification** (only Queens can send DIE)
-
-Unsigned or invalid commands are rejected with warnings.
-
-## Gossip Protocol (Anti-Storm)
-
-To prevent broadcast storms when relaying ALARM messages:
-
-1. **Deduplication Cache**: 32-entry circular buffer tracks recent message hashes
-2. **Immunity Window**: Same message ignored for 500ms after first seen
-3. **Probabilistic Decay**: Relay probability decreases 20% per duplicate seen
-4. **Max Echoes**: Stop relaying after seeing 5 copies of same alarm
-
-## Apoptosis (Programmed Death)
-
-Cells die and rebirth when:
-- Heap usage exceeds 90%
-- Lifetime exceeds 1 hour
-
-On death:
-1. Emit authenticated REBIRTH pheromone with stats
-2. Reset heap to zero
-3. Generate new random Node ID
-4. Re-roll role (might become Queen!)
-5. Increment generation counter
-
-## Building
-
-**Requirements:**
-- `gcc` (cross-compiler for i386)
-- `nasm` (assembler)
-- `qemu-system-i386` (emulator)
-- `grub-mkrescue` or `xorriso` (for ISO creation)
-
+### x86 QEMU Swarm
 ```bash
-# Build ISO image
+# Build ISO
 make
 
 # Run single node
 make run
 
-# Launch a 3-node swarm
+# Launch 3-node swarm
 make swarm
 
-# Debug with GDB
-make debug
-
-# Clean build artifacts
-make clean
+# Launch 5-node swarm
+make swarm5
 ```
 
-## Swarm Observer
+### ARM QEMU Swarm
+```bash
+# Build ARM kernel (requires arm-none-eabi-gcc)
+make arm
 
-Monitor your swarm in real-time:
+# Launch 3-node ARM swarm
+make swarm-arm3
+
+# Launch 5-node ARM swarm
+make swarm-arm5
+```
+
+### ESP32 (PlatformIO)
+```bash
+cd platformio/nanos_swarm
+
+# Build
+pio run
+
+# Upload to ESP32
+pio run -t upload
+
+# Monitor serial
+pio device monitor
+```
+
+## Tactical Dashboard
+
+The web-based dashboard provides real-time swarm control:
 
 ```bash
-# Install dependencies (optional but recommended)
-pip install rich
-
-# Run observer (while swarm is running)
-python3 tools/swarm_observer.py
+# Start dashboard (opens http://localhost:8080)
+make dashboard
 ```
 
-The observer shows:
-- Active nodes with roles
-- Packet statistics
-- Recent events (alarms, deaths, commands)
-- Live updates
+**Features:**
+- Network topology visualization
+- Maze exploration view
+- Terrain exploration with fog-of-war
+- x86 swarm injection (Alarm, Election, Threats)
+- ARM swarm control (Start Maze, Start Terrain, Kill)
+- Event log and packet timeline
+
+### Dashboard API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/state` | GET | Current swarm state |
+| `/api/maze/start` | POST | Start x86 maze |
+| `/api/terrain/start` | POST | Start x86 terrain |
+| `/api/arm/maze/start` | POST | Start ARM maze exploration |
+| `/api/arm/terrain/start` | POST | Start ARM terrain exploration |
+| `/api/arm/kill` | POST | Terminate ARM QEMU nodes |
+| `/api/inject/alarm` | POST | Inject alarm pheromone |
+| `/api/inject/election` | POST | Trigger election |
+
+## ARM Modules
+
+The ARM kernel supports modular exploration systems:
+
+### Maze Module (`maze_arm.c`)
+- Collaborative pathfinding
+- Direction scoring with pheromone trails
+- Wall detection and sharing
+- Solved state propagation
+
+### Terrain Module (`terrain_arm.c`)
+- Procedural terrain generation
+- Fog-of-war exploration
+- Threat detection and reporting
+- Strategic movement commands
+
+Modules are activated via dashboard commands, not auto-start.
 
 ## Memory Model
 
-- **Stack**: 16KB static allocation
-- **Heap**: 64KB bump allocator (triggers apoptosis at 90%)
-- **RX Buffers**: 32 x 2KB = 64KB
-- **TX Queue**: 16 x 128B = 2KB software queue
-- **Gossip Cache**: 32 entries x 12B = 384B
-- **Total**: ~150KB footprint
+### x86
+- **Stack**: 16KB
+- **Heap**: 64KB (apoptosis at 90%)
+- **RX Buffers**: 64KB
+- **TX Queue**: 2KB
+- **Total**: ~150KB
 
-## Network Driver
+### ARM Cortex-M3
+- **Stack**: 4KB
+- **Heap**: 16KB
+- **Neighbors**: 512B
+- **Total**: ~24KB
 
-The e1000 driver operates in **promiscuous mode** with:
-- Non-blocking TX via 16-entry software queue
-- Exponential backoff on congestion (1-32 ticks)
-- Direct send when queue empty and HW ready
+## Network Configuration
 
-## Testing Scenarios
-
-### Test Broadcast Storm Protection
-```bash
-# Start 10+ nodes and inject repeated alarms
-# Observe that network doesn't collapse
-make swarm  # In terminal 1
-make swarm  # In terminal 2
-make swarm  # In terminal 3
+### x86 QEMU
+Uses e1000 NIC with multicast:
+```
+-netdev socket,id=net0,mcast=230.0.0.1:1234
+-device e1000,netdev=net0,mac=52:54:00:XX:XX:XX
 ```
 
-### Test Authentication
-An attacker without the swarm secret cannot:
-- Kill nodes (DIE command rejected)
-- Impersonate a Queen (QUEEN_CMD rejected)
-- Fake death notifications (REBIRTH rejected)
-
-### Test Apoptosis
-Set `MAX_CELL_LIFETIME` to a low value (e.g., 1000 ticks = 10s) and watch cells die and rebirth.
-
-## Configuration
-
-Key constants in `include/nanos.h`:
-
-```c
-#define GOSSIP_CACHE_SIZE   32      // Deduplication entries
-#define GOSSIP_IMMUNITY_MS  500     // Ignore window
-#define GOSSIP_PROB_DECAY   20      // Relay probability decay %
-#define ALARM_MAX_ECHOES    5       // Max copies before stop
-#define HEAP_CRITICAL_PCT   90      // Apoptosis threshold
-#define MAX_CELL_LIFETIME   360000  // Max age in ticks (~1hr)
-#define QUEEN_PROBABILITY   256     // 1 in N becomes queen
+### ARM QEMU
+Uses Stellaris Ethernet with socket multicast:
 ```
+-net nic,macaddr=52:54:00:XX:XX:XX
+-net socket,mcast=230.0.0.1:1234
+```
+
+## Security (Immune System)
+
+Critical commands require:
+1. **FLAG_AUTHENTICATED** bit set
+2. **Valid HMAC** with shared swarm secret
+3. **Role verification** (Queens only for DIE)
+
+## Gossip Protocol
+
+Prevents broadcast storms:
+1. **Deduplication Cache**: 32-entry circular buffer
+2. **Immunity Window**: 500ms ignore after first seen
+3. **Probabilistic Decay**: 20% decrease per duplicate
+4. **Max Echoes**: Stop after 5 copies
+
+## Apoptosis
+
+Cells die and rebirth when:
+- Heap exceeds 90%
+- Lifetime exceeds 1 hour
+
+On death: emit REBIRTH, reset heap, new ID, re-roll role.
 
 ## License
 
