@@ -6,12 +6,18 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* Need POSIX and BSD features */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "../nert_phy_if.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #ifndef _WIN32
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>

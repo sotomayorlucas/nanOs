@@ -99,16 +99,16 @@ typedef void (*nert_message_callback_t)(uint16_t sender_id,
                                          void *user_ctx);
 
 /**
- * Callback for connection state changes
+ * Callback for connection state changes (framework version with context)
  * @param conn_id  Connection ID
  * @param peer_id  Peer node ID
  * @param new_state  New connection state
  * @param user_ctx  User context passed during registration
  */
-typedef void (*nert_connection_callback_t)(int conn_id,
-                                            uint16_t peer_id,
-                                            uint8_t new_state,
-                                            void *user_ctx);
+typedef void (*nert_connection_state_callback_t)(int conn_id,
+                                                  uint16_t peer_id,
+                                                  uint8_t new_state,
+                                                  void *user_ctx);
 
 /**
  * Callback for security events
@@ -178,7 +178,7 @@ struct nert_config {
     /**
      * Connection state callback (optional)
      */
-    nert_connection_callback_t connection_callback;
+    nert_connection_state_callback_t connection_callback;
     void *connection_ctx;
 
     /**
