@@ -9,7 +9,8 @@
       "Bash(python3:*)",
       "Bash(wsl:*)",
       "Bash(python:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(find:*)"
     ]
   }
 }

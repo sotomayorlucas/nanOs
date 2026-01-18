@@ -366,7 +366,7 @@ def terrain_from_elevation(elevation, hash_val):
 TERRAIN_DEFAULT_COVER = [0, 2, 3, 0, 1, 0, 0, 3]
 TERRAIN_DEFAULT_PASS = [3, 2, 3, 1, 2, 1, 3, 0]
 
-def terrain_generate_cell(seed, x, y):
+def terrain_generate_cell(seed, x, y, explored=False):
     """Generate a single terrain cell (mirrors kernel implementation)"""
     h = terrain_hash(seed, x, y)
     elevation = h & 0x07
@@ -375,14 +375,33 @@ def terrain_generate_cell(seed, x, y):
     passability = TERRAIN_DEFAULT_PASS[terrain_type]
 
     base = terrain_type | (elevation << 3) | (cover << 6)
-    meta = (1 << 5) | (passability << 1) | 0x01  # THREAT_UNKNOWN, passability, explored
+    # meta: THREAT_UNKNOWN, passability, explored flag only if specified
+    meta = (1 << 5) | (passability << 1) | (0x01 if explored else 0x00)
     return {'base': base, 'meta': meta}
 
 def terrain_generate_grid(seed):
-    """Generate full terrain grid from seed"""
-    grid = [[terrain_generate_cell(seed, x, y) for x in range(TERRAIN_SIZE)]
+    """Generate full terrain grid from seed (all cells start unexplored)"""
+    grid = [[terrain_generate_cell(seed, x, y, explored=False) for x in range(TERRAIN_SIZE)]
             for y in range(TERRAIN_SIZE)]
     return grid
+
+def terrain_reveal_around(grid, seed, cx, cy, sensor_range):
+    """Reveal cells around position based on sensor range (fog of war)"""
+    revealed = 0
+    for dy in range(-sensor_range, sensor_range + 1):
+        for dx in range(-sensor_range, sensor_range + 1):
+            nx, ny = cx + dx, cy + dy
+            if nx < 0 or nx >= TERRAIN_SIZE or ny < 0 or ny >= TERRAIN_SIZE:
+                continue
+            # Manhattan distance check
+            if abs(dx) + abs(dy) > sensor_range:
+                continue
+            # If not explored, generate and mark as explored
+            if not (grid[ny][nx]['meta'] & 0x01):
+                cell = terrain_generate_cell(seed, nx, ny, explored=True)
+                grid[ny][nx] = cell
+                revealed += 1
+    return revealed
 
 def terrain_get_type(cell):
     """Extract terrain type from cell"""
@@ -640,6 +659,15 @@ def monitor_logs(log_dir):
                                         swarm_state['terrain']['explorers'][node_id]['y'] = y
                                     swarm_state['terrain']['explorers'][node_id]['last_seen'] = time.time()
 
+                                    # Fog of war: reveal cells around explorer
+                                    if swarm_state['terrain']['active'] and swarm_state['terrain']['seed']:
+                                        sensor_range = swarm_state['terrain']['explorers'][node_id].get('sensor_range', 3)
+                                        terrain_reveal_around(
+                                            swarm_state['terrain']['grid'],
+                                            swarm_state['terrain']['seed'],
+                                            x, y, sensor_range
+                                        )
+
                                 # Parse explorer details: heading=N cells=X role=Y
                                 heading_match = re.search(r'heading=(\d+)', line)
                                 cells_match = re.search(r'cells=(\d+)', line)
@@ -671,9 +699,12 @@ def monitor_logs(log_dir):
                                             'last_seen': time.time()
                                         })
 
-                                # Update cells explored count
-                                total_cells = sum(e.get('cells_explored', 0) for e in swarm_state['terrain']['explorers'].values())
-                                swarm_state['terrain']['cells_explored'] = total_cells
+                                # Update cells explored count (count actual explored cells in grid)
+                                explored_count = sum(
+                                    1 for row in swarm_state['terrain']['grid']
+                                    for cell in row if cell['meta'] & 0x01
+                                )
+                                swarm_state['terrain']['cells_explored'] = explored_count
 
                             job_info = parse_job_line(line)
                             if job_info:

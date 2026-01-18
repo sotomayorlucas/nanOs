@@ -9,6 +9,11 @@
 #include "../include/nanos.h"
 #include "../include/io.h"
 #include "../include/e1000.h"
+#include "../include/nanos/bloom.h"
+#include "../include/nanos/gossip.h"
+#include "../include/nanos/hmac.h"
+#include "../include/nanos/allocator.h"
+#include "../include/nanos/serial.h"
 
 /* ==========================================================================
  * Global State - The cell's memory
@@ -16,116 +21,18 @@
 struct nanos_state g_state;
 
 /* ==========================================================================
- * Bump Allocator with Apoptosis Support
+ * VGA Console (implementation in arch/x86/console_vga.c)
  * ========================================================================== */
-#define HEAP_SIZE 65536
-static uint8_t heap[HEAP_SIZE];
-static size_t heap_ptr = 0;
-
-void* bump_alloc(size_t size) {
-    size = (size + 15) & ~15;  /* 16-byte align */
-
-    if (heap_ptr + size > HEAP_SIZE) {
-        return (void*)0;  /* Trigger apoptosis check */
-    }
-
-    void* ptr = &heap[heap_ptr];
-    heap_ptr += size;
-    g_state.heap_used = heap_ptr;
-    return ptr;
-}
-
-size_t heap_usage_percent(void) {
-    return (heap_ptr * 100) / HEAP_SIZE;
-}
-
-void heap_reset(void) {
-    heap_ptr = 0;
-    g_state.heap_used = 0;
-}
+/* Functions declared in nanos.h, implemented in arch/x86/console_vga.c */
 
 /* ==========================================================================
- * VGA Console
- * ========================================================================== */
-#define VGA_ADDR    0xB8000
-#define VGA_WIDTH   80
-#define VGA_HEIGHT  25
-
-static uint16_t* const vga_buffer = (uint16_t*)VGA_ADDR;
-static int vga_row = 0;
-static int vga_col = 0;
-static uint8_t vga_color = 0x0A;  /* Default: bright green */
-
-void vga_set_color(uint8_t color) {
-    vga_color = color;
-}
-
-void vga_clear(void) {
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        vga_buffer[i] = (vga_color << 8) | ' ';
-    }
-    vga_row = 0;
-    vga_col = 0;
-}
-
-void vga_putchar(char c) {
-    if (c == '\n') {
-        vga_col = 0;
-        vga_row++;
-    } else {
-        vga_buffer[vga_row * VGA_WIDTH + vga_col] = (vga_color << 8) | c;
-        vga_col++;
-        if (vga_col >= VGA_WIDTH) {
-            vga_col = 0;
-            vga_row++;
-        }
-    }
-
-    if (vga_row >= VGA_HEIGHT) {
-        for (int i = 0; i < VGA_WIDTH * (VGA_HEIGHT - 1); i++) {
-            vga_buffer[i] = vga_buffer[i + VGA_WIDTH];
-        }
-        for (int i = 0; i < VGA_WIDTH; i++) {
-            vga_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + i] = (vga_color << 8) | ' ';
-        }
-        vga_row = VGA_HEIGHT - 1;
-    }
-}
-
-void vga_puts(const char* str) {
-    while (*str) vga_putchar(*str++);
-}
-
-void vga_put_hex(uint32_t value) {
-    const char* hex = "0123456789ABCDEF";
-    vga_puts("0x");
-    for (int i = 28; i >= 0; i -= 4) {
-        vga_putchar(hex[(value >> i) & 0xF]);
-    }
-}
-
-void vga_put_dec(uint32_t value) {
-    char buf[12];
-    int i = 0;
-    if (value == 0) {
-        vga_putchar('0');
-        return;
-    }
-    while (value > 0) {
-        buf[i++] = '0' + (value % 10);
-        value /= 10;
-    }
-    while (i > 0) vga_putchar(buf[--i]);
-}
-
-/* ==========================================================================
- * Timer (PIT)
+ * Timer (PIT) - x86 specific
  * ========================================================================== */
 #define PIT_CH0_DATA    0x40
 #define PIT_CMD         0x43
 #define PIT_FREQUENCY   1193182
 
-static volatile uint32_t ticks = 0;
+volatile uint32_t ticks = 0;  /* Global tick counter, used by protocol modules */
 
 void pit_init(uint32_t frequency) {
     uint32_t divisor = PIT_FREQUENCY / frequency;
@@ -164,7 +71,7 @@ void seed_random(void) {
 }
 
 /* ==========================================================================
- * IDT Setup
+ * IDT Setup - x86 specific
  * ========================================================================== */
 struct idt_entry {
     uint16_t offset_low;
@@ -246,48 +153,7 @@ __asm__(
     "    iret\n"
 );
 
-/* ==========================================================================
- * Serial Port (COM1) for Logging
- * ========================================================================== */
-#define COM1_PORT       0x3F8
-
-static void serial_init(void) {
-    outb(COM1_PORT + 1, 0x00);  /* Disable interrupts */
-    outb(COM1_PORT + 3, 0x80);  /* Enable DLAB */
-    outb(COM1_PORT + 0, 0x03);  /* 38400 baud (low byte) */
-    outb(COM1_PORT + 1, 0x00);  /* (high byte) */
-    outb(COM1_PORT + 3, 0x03);  /* 8 bits, no parity, 1 stop */
-    outb(COM1_PORT + 2, 0xC7);  /* Enable FIFO */
-    outb(COM1_PORT + 4, 0x0B);  /* IRQs enabled, RTS/DSR set */
-}
-
-static void serial_putchar(char c) {
-    while ((inb(COM1_PORT + 5) & 0x20) == 0);
-    outb(COM1_PORT, c);
-}
-
-static void serial_puts(const char* str) {
-    while (*str) serial_putchar(*str++);
-}
-
-static void serial_put_hex(uint32_t value) {
-    const char* hex = "0123456789ABCDEF";
-    serial_puts("0x");
-    for (int i = 28; i >= 0; i -= 4) {
-        serial_putchar(hex[(value >> i) & 0xF]);
-    }
-}
-
-static void serial_put_dec(uint32_t value) {
-    char buf[12];
-    int i = 0;
-    if (value == 0) { serial_putchar('0'); return; }
-    while (value > 0) {
-        buf[i++] = '0' + (value % 10);
-        value /= 10;
-    }
-    while (i > 0) serial_putchar(buf[--i]);
-}
+/* Serial Port functions in arch/x86/serial_com.c */
 
 static void idt_set_entry(uint8_t num, uint32_t handler) {
     idt[num].offset_low  = handler & 0xFFFF;
@@ -315,238 +181,6 @@ static void pic_init(void) {
     outb(0x21, 4);    outb(0xA1, 2);    io_wait();
     outb(0x21, 0x01); outb(0xA1, 0x01); io_wait();
     outb(0x21, 0xFC); outb(0xA1, 0xFF);  /* Enable IRQ0 (timer) and IRQ1 (keyboard) */
-}
-
-/* ==========================================================================
- * HMAC-like Authentication (SipHash-inspired, simplified)
- * ========================================================================== */
-static uint32_t swarm_secret[4] = {
-    SWARM_SECRET_0, SWARM_SECRET_1, SWARM_SECRET_2, SWARM_SECRET_3
-};
-
-static uint32_t siphash_round(uint32_t v0, uint32_t v1, uint32_t v2, uint32_t v3) {
-    v0 += v1; v1 = (v1 << 5) | (v1 >> 27); v1 ^= v0;
-    v2 += v3; v3 = (v3 << 8) | (v3 >> 24); v3 ^= v2;
-    v0 += v3; v3 = (v3 << 7) | (v3 >> 25); v3 ^= v0;
-    v2 += v1; v1 = (v1 << 13) | (v1 >> 19); v1 ^= v2;
-    return v0 ^ v1 ^ v2 ^ v3;
-}
-
-void compute_hmac(struct nanos_pheromone* pkt) {
-    uint32_t v0 = swarm_secret[0] ^ pkt->magic;
-    uint32_t v1 = swarm_secret[1] ^ pkt->node_id;
-    uint32_t v2 = swarm_secret[2] ^ (pkt->type | (pkt->ttl << 8));
-    uint32_t v3 = swarm_secret[3] ^ pkt->seq;
-
-    uint32_t hash = siphash_round(v0, v1, v2, v3);
-    hash = siphash_round(hash, v1, v2, v3);  /* Second round */
-
-    /* Store truncated HMAC */
-    pkt->hmac[0] = (hash >> 0) & 0xFF;
-    pkt->hmac[1] = (hash >> 8) & 0xFF;
-    pkt->hmac[2] = (hash >> 16) & 0xFF;
-    pkt->hmac[3] = (hash >> 24) & 0xFF;
-    hash = siphash_round(hash, v0, v2, v1);
-    pkt->hmac[4] = (hash >> 0) & 0xFF;
-    pkt->hmac[5] = (hash >> 8) & 0xFF;
-    pkt->hmac[6] = (hash >> 16) & 0xFF;
-    pkt->hmac[7] = (hash >> 24) & 0xFF;
-
-    pkt->flags |= FLAG_AUTHENTICATED;
-}
-
-bool verify_hmac(struct nanos_pheromone* pkt) {
-    uint8_t saved_hmac[HMAC_TAG_SIZE];
-    for (int i = 0; i < HMAC_TAG_SIZE; i++) {
-        saved_hmac[i] = pkt->hmac[i];
-    }
-
-    compute_hmac(pkt);
-
-    for (int i = 0; i < HMAC_TAG_SIZE; i++) {
-        if (pkt->hmac[i] != saved_hmac[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool is_authenticated_type(uint8_t type) {
-    return type == PHEROMONE_DIE ||
-           type == PHEROMONE_QUEEN_CMD ||
-           type == PHEROMONE_REBIRTH;
-}
-
-/* ==========================================================================
- * Bloom Filter - O(1) Deduplication
- * ========================================================================== */
-
-/* Hash functions for bloom filter */
-static uint32_t bloom_hash_0(uint32_t node_id, uint32_t seq, uint8_t type) {
-    uint32_t h = node_id;
-    h ^= seq * 0x85EBCA6B;
-    h ^= type * 0xC2B2AE35;
-    h ^= h >> 16;
-    h *= 0x85EBCA6B;
-    return h % BLOOM_BITS;
-}
-
-static uint32_t bloom_hash_1(uint32_t node_id, uint32_t seq, uint8_t type) {
-    uint32_t h = seq;
-    h ^= node_id * 0xCC9E2D51;
-    h ^= type * 0x1B873593;
-    h ^= h >> 15;
-    h *= 0xCC9E2D51;
-    return h % BLOOM_BITS;
-}
-
-static uint32_t bloom_hash_2(uint32_t node_id, uint32_t seq, uint8_t type) {
-    uint32_t h = type | (seq << 8);
-    h ^= node_id;
-    h = (h ^ (h >> 16)) * 0x7FEB352D;
-    h = (h ^ (h >> 15)) * 0x846CA68B;
-    return (h ^ (h >> 16)) % BLOOM_BITS;
-}
-
-/* Initialize bloom filter */
-static void bloom_init(void) {
-    for (int slot = 0; slot < BLOOM_SLOTS; slot++) {
-        for (int i = 0; i < BLOOM_BYTES; i++) {
-            g_state.bloom.bits[slot][i] = 0;
-        }
-    }
-    g_state.bloom.current_slot = 0;
-    g_state.bloom.slot_start_tick = 0;
-    g_state.bloom.insertions = 0;
-    g_state.bloom.duplicates_blocked = 0;
-}
-
-/* Check if bit is set in bloom filter */
-static int bloom_test_bit(uint8_t* bits, uint32_t bit_pos) {
-    return (bits[bit_pos / 8] >> (bit_pos % 8)) & 1;
-}
-
-/* Set bit in bloom filter */
-static void bloom_set_bit(uint8_t* bits, uint32_t bit_pos) {
-    bits[bit_pos / 8] |= (1 << (bit_pos % 8));
-}
-
-/* Check and add packet to bloom filter - returns true if NEW, false if duplicate */
-static bool bloom_check_and_add(struct nanos_pheromone* pkt) {
-    uint32_t now = ticks;
-
-    /* Rotate slot if window expired */
-    if (now - g_state.bloom.slot_start_tick > (BLOOM_WINDOW_MS / 10)) {
-        g_state.bloom.current_slot = (g_state.bloom.current_slot + 1) % BLOOM_SLOTS;
-        /* Clear new slot */
-        for (int i = 0; i < BLOOM_BYTES; i++) {
-            g_state.bloom.bits[g_state.bloom.current_slot][i] = 0;
-        }
-        g_state.bloom.slot_start_tick = now;
-    }
-
-    /* Calculate hashes */
-    uint32_t h0 = bloom_hash_0(pkt->node_id, pkt->seq, pkt->type);
-    uint32_t h1 = bloom_hash_1(pkt->node_id, pkt->seq, pkt->type);
-    uint32_t h2 = bloom_hash_2(pkt->node_id, pkt->seq, pkt->type);
-
-    /* Check ALL slots (full time window) */
-    for (int slot = 0; slot < BLOOM_SLOTS; slot++) {
-        uint8_t* bits = g_state.bloom.bits[slot];
-        if (bloom_test_bit(bits, h0) &&
-            bloom_test_bit(bits, h1) &&
-            bloom_test_bit(bits, h2)) {
-            /* Probably seen before */
-            g_state.bloom.duplicates_blocked++;
-            return false;
-        }
-    }
-
-    /* Not seen - add to current slot */
-    uint8_t* current = g_state.bloom.bits[g_state.bloom.current_slot];
-    bloom_set_bit(current, h0);
-    bloom_set_bit(current, h1);
-    bloom_set_bit(current, h2);
-    g_state.bloom.insertions++;
-
-    return true;  /* New packet */
-}
-
-/* ==========================================================================
- * Gossip Protocol - Prevent Broadcast Storms
- * ========================================================================== */
-uint32_t gossip_hash(struct nanos_pheromone* pkt) {
-    /* Simple hash of identifying fields */
-    uint32_t h = pkt->node_id;
-    h = h * 31 + pkt->seq;
-    h = h * 31 + pkt->type;
-    h = h * 31 + (pkt->payload[0] | (pkt->payload[1] << 8));
-    return h;
-}
-
-void gossip_record(struct nanos_pheromone* pkt) {
-    uint32_t hash = gossip_hash(pkt);
-
-    /* Check if already in cache */
-    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
-        if (g_state.gossip_cache[i].hash == hash) {
-            g_state.gossip_cache[i].count++;
-            return;
-        }
-    }
-
-    /* Add to cache (circular) */
-    struct gossip_entry* entry = &g_state.gossip_cache[g_state.gossip_index];
-    entry->hash = hash;
-    entry->timestamp = ticks;
-    entry->count = 1;
-    entry->relayed = 0;
-
-    g_state.gossip_index = (g_state.gossip_index + 1) % GOSSIP_CACHE_SIZE;
-}
-
-bool gossip_should_relay(struct nanos_pheromone* pkt) {
-    uint32_t hash = gossip_hash(pkt);
-
-    /* Look up in cache */
-    for (int i = 0; i < GOSSIP_CACHE_SIZE; i++) {
-        struct gossip_entry* entry = &g_state.gossip_cache[i];
-
-        if (entry->hash == hash) {
-            /* Message still fresh? */
-            if (ticks - entry->timestamp > (GOSSIP_IMMUNITY_MS / 10)) {
-                entry->count = 1;  /* Reset - old message */
-                entry->timestamp = ticks;
-            }
-
-            /* Already relayed? */
-            if (entry->relayed) {
-                return false;
-            }
-
-            /* Too many copies seen? */
-            if (entry->count >= ALARM_MAX_ECHOES) {
-                g_state.packets_dropped++;
-                return false;
-            }
-
-            /* Probabilistic relay - decay with each copy seen */
-            uint32_t prob = GOSSIP_PROB_BASE;
-            for (uint8_t j = 1; j < entry->count && prob > 0; j++) {
-                prob = (prob * (100 - GOSSIP_PROB_DECAY)) / 100;
-            }
-
-            if ((random() % 100) < prob) {
-                entry->relayed = 1;
-                return true;
-            }
-
-            return false;
-        }
-    }
-
-    /* Not in cache - first time seeing it, relay */
-    return true;
 }
 
 /* ==========================================================================
@@ -673,9 +307,9 @@ static void cmd_show_status(void) {
     vga_puts("Heap: ");
     vga_put_dec(heap_usage_percent());
     vga_puts("% (");
-    vga_put_dec(heap_ptr);
+    vga_put_dec(heap_used_bytes());
     vga_puts("/");
-    vga_put_dec(HEAP_SIZE);
+    vga_put_dec(heap_total_bytes());
     vga_puts(")\n");
 
     /* Uptime */
@@ -2143,6 +1777,14 @@ static void terrain_init(void) {
     g_state.terrain.objective_count = 0;
     g_state.terrain.threat_count = 0;
 
+    /* Anti-looping: visited history */
+    g_state.terrain.visited_head = 0;
+    g_state.terrain.visited_count = 0;
+
+    /* Frontier-based exploration */
+    g_state.terrain.has_frontier = 0;
+    g_state.terrain.last_frontier_scan = 0;
+
     /* Set sensor range based on role */
     switch (g_state.role) {
         case ROLE_EXPLORER:
@@ -2283,6 +1925,100 @@ static void terrain_sensor_scan(void) {
     }
 }
 
+/* Add position to visited history (circular buffer) */
+static void terrain_record_visited(uint8_t x, uint8_t y) {
+    g_state.terrain.visited[g_state.terrain.visited_head].x = x;
+    g_state.terrain.visited[g_state.terrain.visited_head].y = y;
+    g_state.terrain.visited_head = (g_state.terrain.visited_head + 1) % 32;
+    if (g_state.terrain.visited_count < 32) {
+        g_state.terrain.visited_count++;
+    }
+}
+
+/* Check if position was recently visited, return recency (0 = not visited, 1-32 = how recent) */
+static int terrain_visit_recency(uint8_t x, uint8_t y) {
+    for (int i = 0; i < g_state.terrain.visited_count; i++) {
+        int idx = (g_state.terrain.visited_head - 1 - i + 32) % 32;
+        if (g_state.terrain.visited[idx].x == x && g_state.terrain.visited[idx].y == y) {
+            return i + 1;  /* 1 = most recent, higher = older */
+        }
+    }
+    return 0;  /* Not in history */
+}
+
+/* Count unexplored cells adjacent to a position (frontier score) */
+static int terrain_unexplored_neighbors(uint8_t x, uint8_t y) {
+    int count = 0;
+    for (int dir = 0; dir < 8; dir++) {
+        int nx = x + terrain_dx[dir];
+        int ny = y + terrain_dy[dir];
+        if (nx >= 0 && nx < TERRAIN_SIZE && ny >= 0 && ny < TERRAIN_SIZE) {
+            if (!terrain_is_explored(nx, ny)) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+/* Find nearest frontier (explored cell with unexplored neighbors) */
+static void terrain_find_frontier(void) {
+    if (ticks - g_state.terrain.last_frontier_scan < 500) return;  /* Scan every ~5 seconds */
+    g_state.terrain.last_frontier_scan = ticks;
+
+    uint8_t px = g_state.terrain.pos_x;
+    uint8_t py = g_state.terrain.pos_y;
+    int best_dist = 10000;
+    int best_x = -1, best_y = -1;
+
+    /* Search in expanding squares for efficiency */
+    for (int radius = 1; radius < TERRAIN_SIZE; radius++) {
+        int found_this_ring = 0;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                /* Only check cells on this ring */
+                if ((dx < 0 ? -dx : dx) != radius && (dy < 0 ? -dy : dy) != radius) continue;
+
+                int nx = px + dx;
+                int ny = py + dy;
+                if (nx < 0 || nx >= TERRAIN_SIZE || ny < 0 || ny >= TERRAIN_SIZE) continue;
+
+                /* Must be explored (generated) */
+                if (!terrain_is_explored(nx, ny)) continue;
+
+                /* Must be passable */
+                if (terrain_get_passability(nx, ny) == PASS_BLOCKED) continue;
+
+                /* Count unexplored neighbors */
+                int unexplored = terrain_unexplored_neighbors(nx, ny);
+                if (unexplored > 0) {
+                    int dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+                    /* Prefer frontiers with more unexplored neighbors */
+                    dist -= unexplored * 2;
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best_x = nx;
+                        best_y = ny;
+                        found_this_ring = 1;
+                    }
+                }
+            }
+        }
+
+        /* Stop early if we found a frontier and checked at least 3 rings */
+        if (found_this_ring && radius >= 3) break;
+    }
+
+    if (best_x >= 0) {
+        g_state.terrain.frontier_x = best_x;
+        g_state.terrain.frontier_y = best_y;
+        g_state.terrain.has_frontier = 1;
+    } else {
+        g_state.terrain.has_frontier = 0;
+    }
+}
+
 /* Score a potential move */
 static int terrain_score_move(uint8_t nx, uint8_t ny) {
     int score = 0;
@@ -2291,9 +2027,42 @@ static int terrain_score_move(uint8_t nx, uint8_t ny) {
     uint8_t pass = terrain_get_passability(nx, ny);
     if (pass == PASS_BLOCKED) return -10000;
 
-    /* Unexplored cells are valuable */
+    /* Unexplored cells are VERY valuable */
     if (!terrain_is_explored(nx, ny)) {
-        score += 100;
+        score += 200;  /* Increased from 100 */
+    } else {
+        /* Explored cells with unexplored neighbors are valuable too */
+        int unexplored_near = terrain_unexplored_neighbors(nx, ny);
+        score += unexplored_near * 30;
+    }
+
+    /* HEAVILY penalize recently visited cells to prevent looping */
+    int recency = terrain_visit_recency(nx, ny);
+    if (recency > 0) {
+        /* More recent = worse penalty: recency 1 = -300, recency 32 = -10 */
+        score -= 300 / recency;
+    }
+
+    /* Bonus for moving toward frontier */
+    if (g_state.terrain.has_frontier) {
+        int curr_dist_to_frontier =
+            (g_state.terrain.pos_x < g_state.terrain.frontier_x ?
+             g_state.terrain.frontier_x - g_state.terrain.pos_x :
+             g_state.terrain.pos_x - g_state.terrain.frontier_x) +
+            (g_state.terrain.pos_y < g_state.terrain.frontier_y ?
+             g_state.terrain.frontier_y - g_state.terrain.pos_y :
+             g_state.terrain.pos_y - g_state.terrain.frontier_y);
+
+        int new_dist_to_frontier =
+            (nx < g_state.terrain.frontier_x ?
+             g_state.terrain.frontier_x - nx :
+             nx - g_state.terrain.frontier_x) +
+            (ny < g_state.terrain.frontier_y ?
+             g_state.terrain.frontier_y - ny :
+             ny - g_state.terrain.frontier_y);
+
+        /* Bonus for getting closer to frontier */
+        score += (curr_dist_to_frontier - new_dist_to_frontier) * 25;
     }
 
     /* Movement cost penalty */
@@ -2386,6 +2155,9 @@ static void terrain_move(void) {
     /* Perform sensor scan first */
     terrain_sensor_scan();
 
+    /* Update frontier target periodically */
+    terrain_find_frontier();
+
     /* Check if at objective */
     if (g_state.terrain.has_objective &&
         g_state.terrain.pos_x == g_state.terrain.objective_x &&
@@ -2394,12 +2166,25 @@ static void terrain_move(void) {
         serial_puts("[TERRAIN] Objective reached!\n");
     }
 
+    /* Check if reached frontier */
+    if (g_state.terrain.has_frontier &&
+        g_state.terrain.pos_x == g_state.terrain.frontier_x &&
+        g_state.terrain.pos_y == g_state.terrain.frontier_y) {
+        /* Force new frontier search on next move */
+        g_state.terrain.has_frontier = 0;
+        g_state.terrain.last_frontier_scan = 0;
+    }
+
+    /* Record current position in visited history BEFORE moving */
+    terrain_record_visited(g_state.terrain.pos_x, g_state.terrain.pos_y);
+
     /* Choose direction */
     int dir = terrain_choose_direction();
 
     if (dir < 0) {
-        /* Stuck - backtrack */
+        /* Stuck - backtrack and force frontier search */
         g_state.terrain.stuck_count++;
+        g_state.terrain.last_frontier_scan = 0;  /* Force new frontier search */
         if (g_state.terrain.path_len > 0) {
             g_state.terrain.path_len--;
             g_state.terrain.pos_x = g_state.terrain.path[g_state.terrain.path_len].x;
@@ -2460,6 +2245,19 @@ static void terrain_share_discoveries(void) {
     g_state.packets_tx++;
     g_state.terrain.reports_sent++;
 
+    /* Log position for dashboard */
+    serial_puts("[TERRAIN] node=");
+    serial_put_hex(g_state.node_id);
+    serial_puts(" pos=");
+    serial_put_dec(g_state.terrain.pos_x);
+    serial_puts(",");
+    serial_put_dec(g_state.terrain.pos_y);
+    serial_puts(" heading=");
+    serial_put_dec(g_state.terrain.heading);
+    serial_puts(" cells=");
+    serial_put_dec(g_state.terrain.cells_explored);
+    serial_puts("\n");
+
     /* Send cell reports (up to 4 cells) */
     pkt.type = PHEROMONE_TERRAIN_REPORT;
     pkt.seq = g_state.seq_counter++;
@@ -2507,10 +2305,22 @@ static void terrain_process_init(struct nanos_pheromone* pkt) {
     terrain_init();
 
     g_state.terrain.seed = *(uint32_t*)(pkt->payload);
-    g_state.terrain.start_x = pkt->payload[5] % TERRAIN_SIZE;
-    g_state.terrain.start_y = pkt->payload[6] % TERRAIN_SIZE;
-    g_state.terrain.pos_x = g_state.terrain.start_x;
-    g_state.terrain.pos_y = g_state.terrain.start_y;
+
+    /* Each node starts at a unique position based on node_id hash */
+    /* This distributes any number of nodes across the terrain */
+    uint32_t hash = g_state.node_id;
+    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+    hash = (hash >> 16) ^ hash;
+
+    /* Use hash to place node anywhere in terrain (with margin) */
+    int start_x = 3 + (hash % (TERRAIN_SIZE - 6));
+    int start_y = 3 + ((hash >> 8) % (TERRAIN_SIZE - 6));
+
+    g_state.terrain.start_x = start_x;
+    g_state.terrain.start_y = start_y;
+    g_state.terrain.pos_x = start_x;
+    g_state.terrain.pos_y = start_y;
     g_state.terrain.active = 1;
     g_state.terrain.mode = TERRAIN_MODE_EXPLORE;
 
@@ -3939,7 +3749,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     g_state.node_id = random();
     g_state.role = determine_role();
     g_state.generation = 0;
-    g_state.heap_size = HEAP_SIZE;
+    g_state.heap_size = heap_total_bytes();
 
     vga_puts("[*] Node ID: ");
     vga_put_hex(g_state.node_id);

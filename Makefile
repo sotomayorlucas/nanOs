@@ -30,7 +30,11 @@ ifeq ($(ARCH),x86)
     ISO     := nanos-x86.iso
 
     ASM_SRC := boot/boot.asm
-    C_SRC   := kernel/kernel.c kernel/collective.c drivers/e1000_minimal.c arch/x86/hal_x86.c
+    C_SRC   := kernel/kernel.c kernel/collective.c \
+                kernel/memory/allocator.c \
+                kernel/protocol/bloom.c kernel/protocol/gossip.c kernel/protocol/hmac.c \
+                arch/x86/console_vga.c arch/x86/serial_com.c \
+                drivers/e1000_minimal.c arch/x86/hal_x86.c
 
     QEMU_OPTS := -netdev user,id=net0 -device e1000,netdev=net0 -m 32M
     QEMU_NET_SWARM := -netdev socket,id=net0,mcast=230.0.0.1:1234 \

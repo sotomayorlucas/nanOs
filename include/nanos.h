@@ -648,6 +648,18 @@ struct nanos_state {
         } path[TERRAIN_PATH_LEN];
         uint8_t  path_len;
 
+        /* Visited history (circular buffer for anti-looping) */
+        struct {
+            uint8_t x, y;
+        } visited[32];
+        uint8_t  visited_head;              /* Next write index */
+        uint8_t  visited_count;             /* Number of valid entries */
+
+        /* Frontier tracking (unexplored cells on boundary) */
+        uint8_t  frontier_x, frontier_y;    /* Current target frontier */
+        uint8_t  has_frontier;              /* Valid frontier target? */
+        uint32_t last_frontier_scan;        /* Tick of last frontier scan */
+
         /* Current objective */
         uint8_t  objective_x, objective_y;
         uint8_t  has_objective;
@@ -778,6 +790,7 @@ void vga_puts(const char* str);
 void vga_putchar(char c);
 void vga_put_hex(uint32_t value);
 void vga_put_dec(uint32_t value);
+void vga_set_color(uint8_t color);
 
 /* ==========================================================================
  * Random Number Generator
