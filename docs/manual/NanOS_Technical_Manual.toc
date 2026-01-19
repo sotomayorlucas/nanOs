@@ -1,0 +1,85 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {part}{I\hspace {1em}NanOS Core}{11}{part.1}%
+\contentsline {chapter}{\numberline {1}Introducción}{13}{chapter.1}%
+\contentsline {section}{\numberline {1.1}¿Qué es NanOS?}{13}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Inspiración Biológica}{13}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Plataformas Soportadas}{14}{section.1.3}%
+\contentsline {chapter}{\numberline {2}Arquitectura del Sistema}{15}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Estructura de Capas}{15}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Componentes del Kernel}{15}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}Gestión de Memoria}{15}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}Timer y Scheduling}{15}{subsection.2.2.2}%
+\contentsline {section}{\numberline {2.3}Ciclo de Vida del Nodo}{16}{section.2.3}%
+\contentsline {subsection}{\numberline {2.3.1}Condiciones de Apoptosis}{16}{subsection.2.3.1}%
+\contentsline {chapter}{\numberline {3}Sistema de Roles}{17}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Roles Definidos}{17}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Transición de Roles}{17}{section.3.2}%
+\contentsline {section}{\numberline {3.3}Algoritmo de Elección de Reina}{18}{section.3.3}%
+\contentsline {chapter}{\numberline {4}Protocolo de Feromonas}{19}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Tipos de Pheromones}{19}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Formato de Paquete}{19}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Paquete Estándar (64 bytes)}{19}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.2}Paquete Compacto ARM (24 bytes)}{19}{subsection.4.2.2}%
+\contentsline {section}{\numberline {4.3}Autenticación HMAC}{20}{section.4.3}%
+\contentsline {chapter}{\numberline {5}Mecanismos de Red}{21}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Bloom Filter para Deduplicación}{21}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Gossip Protocol}{21}{section.5.2}%
+\contentsline {section}{\numberline {5.3}Gradient Routing}{22}{section.5.3}%
+\contentsline {section}{\numberline {5.4}Enrutamiento Hebbiano (v0.5)}{22}{section.5.4}%
+\contentsline {subsection}{\numberline {5.4.1}Peso Sináptico}{22}{subsection.5.4.1}%
+\contentsline {subsection}{\numberline {5.4.2}Regla de Aprendizaje}{23}{subsection.5.4.2}%
+\contentsline {subsection}{\numberline {5.4.3}Fórmula de Costo Neural}{23}{subsection.5.4.3}%
+\contentsline {chapter}{\numberline {6}Stigmergia: Feromonas Digitales (v0.5)}{25}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Inspiración Biológica}{25}{section.6.1}%
+\contentsline {section}{\numberline {6.2}Tipos de Feromonas}{25}{section.6.2}%
+\contentsline {section}{\numberline {6.3}Estructura de Datos}{26}{section.6.3}%
+\contentsline {section}{\numberline {6.4}Decaimiento Temporal}{27}{section.6.4}%
+\contentsline {section}{\numberline {6.5}Modificación de Costo de Movimiento}{27}{section.6.5}%
+\contentsline {section}{\numberline {6.6}Propagación de Feromonas}{28}{section.6.6}%
+\contentsline {section}{\numberline {6.7}API de Stigmergia}{28}{section.6.7}%
+\contentsline {chapter}{\numberline {7}Black Box Distribuida: ``El Último Aliento'' (v0.5)}{29}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Problema: Evidencia Forense Perdida}{29}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Solución: El Último Aliento}{29}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Contenido del Testamento}{30}{section.7.3}%
+\contentsline {section}{\numberline {7.4}Flujo de Operación}{31}{section.7.4}%
+\contentsline {section}{\numberline {7.5}Almacenamiento de Testamentos}{31}{section.7.5}%
+\contentsline {section}{\numberline {7.6}API de Black Box}{32}{section.7.6}%
+\contentsline {section}{\numberline {7.7}Ejemplo de Investigación Forense}{32}{section.7.7}%
+\contentsline {part}{II\hspace {1em}Protocolo NERT}{35}{part.2}%
+\contentsline {chapter}{\numberline {8}Visión General de NERT}{37}{chapter.8}%
+\contentsline {section}{\numberline {8.1}Motivación}{37}{section.8.1}%
+\contentsline {section}{\numberline {8.2}Clases de Confiabilidad}{37}{section.8.2}%
+\contentsline {chapter}{\numberline {9}Formato de Paquete NERT}{39}{chapter.9}%
+\contentsline {section}{\numberline {9.1}Header Estándar (20 bytes)}{39}{section.9.1}%
+\contentsline {section}{\numberline {9.2}Campo de Flags}{39}{section.9.2}%
+\contentsline {section}{\numberline {9.3}Estructura Completa del Paquete}{40}{section.9.3}%
+\contentsline {chapter}{\numberline {10}Criptografía}{41}{chapter.10}%
+\contentsline {section}{\numberline {10.1}Algoritmos Utilizados}{41}{section.10.1}%
+\contentsline {section}{\numberline {10.2}Derivación de Claves}{41}{section.10.2}%
+\contentsline {section}{\numberline {10.3}Ventana de Gracia para Rotación de Claves}{42}{section.10.3}%
+\contentsline {section}{\numberline {10.4}Construcción del Nonce}{42}{section.10.4}%
+\contentsline {chapter}{\numberline {11}Mecanismos de Confiabilidad}{43}{chapter.11}%
+\contentsline {section}{\numberline {11.1}Máquina de Estados de Conexión}{43}{section.11.1}%
+\contentsline {section}{\numberline {11.2}Two-Way Handshake}{43}{section.11.2}%
+\contentsline {section}{\numberline {11.3}Selective ACK (SACK)}{43}{section.11.3}%
+\contentsline {section}{\numberline {11.4}Retransmisión con Backoff Exponencial}{44}{section.11.4}%
+\contentsline {chapter}{\numberline {12}Forward Error Correction}{45}{chapter.12}%
+\contentsline {section}{\numberline {12.1}Esquema XOR Parity}{45}{section.12.1}%
+\contentsline {section}{\numberline {12.2}Capacidad de Recuperación}{45}{section.12.2}%
+\contentsline {chapter}{\numberline {13}Multi-Path Transmission}{47}{chapter.13}%
+\contentsline {section}{\numberline {13.1}Selección de Rutas}{47}{section.13.1}%
+\contentsline {part}{III\hspace {1em}Guía de Implementación}{49}{part.3}%
+\contentsline {chapter}{\numberline {14}Compilación y Despliegue}{51}{chapter.14}%
+\contentsline {section}{\numberline {14.1}Requisitos}{51}{section.14.1}%
+\contentsline {section}{\numberline {14.2}Compilación x86}{51}{section.14.2}%
+\contentsline {section}{\numberline {14.3}Compilación ARM}{51}{section.14.3}%
+\contentsline {section}{\numberline {14.4}Compilación ESP32}{51}{section.14.4}%
+\contentsline {chapter}{\numberline {15}API de Programación}{53}{chapter.15}%
+\contentsline {section}{\numberline {15.1}Inicialización}{53}{section.15.1}%
+\contentsline {section}{\numberline {15.2}Envío de Mensajes}{53}{section.15.2}%
+\contentsline {chapter}{\numberline {16}Debugging y Monitoreo}{55}{chapter.16}%
+\contentsline {section}{\numberline {16.1}Estadísticas de NERT}{55}{section.16.1}%
+\contentsline {section}{\numberline {16.2}Métricas Clave}{55}{section.16.2}%
+\contentsline {chapter}{\numberline {A}Constantes de Configuración}{57}{appendix.Alph1}%
+\contentsline {chapter}{\numberline {B}Glosario}{59}{appendix.Alph2}%
+\contentsline {chapter}{Sobre Este Documento}{61}{appendix*.51}%

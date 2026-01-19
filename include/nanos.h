@@ -258,6 +258,8 @@ typedef _Bool              bool;
 #define PHEROMONE_TERRAIN_STRATEGY  0x85    /* Formation/route commands */
 #define PHEROMONE_TERRAIN_COMPLETE  0x86    /* Area fully explored */
 #define PHEROMONE_TERRAIN_ROUTE     0x87    /* Optimal path segment */
+#define PHEROMONE_STIGMERGIA        0x88    /* v0.5: Digital pheromone broadcast */
+#define PHEROMONE_LAST_WILL         0x89    /* v0.5: Dying node's testament (Black Box) */
 
 /* Sensor Ranges by Role */
 #define SENSOR_RANGE_SCOUT      6   /* EXPLORER role: 6 cell radius */
@@ -368,7 +370,7 @@ _Static_assert(sizeof(struct nanos_pheromone) == 64, "Pheromone must be 64 bytes
 #define PKT_SET_ROLE(pkt, r) ((pkt)->flags = ((pkt)->flags & ~FLAG_ROLE_MASK) | ((r) << FLAG_ROLE_SHIFT))
 
 /* ==========================================================================
- * Neighbor Entry - For quorum sensing
+ * Neighbor Entry - For quorum sensing and Hebbian routing
  * ========================================================================== */
 struct neighbor_entry {
     uint32_t node_id;       /* Neighbor's ID (0 = empty slot) */
@@ -376,6 +378,16 @@ struct neighbor_entry {
     uint8_t  role;          /* Neighbor's role */
     uint8_t  distance;      /* Neighbor's distance to queen */
     uint16_t packets;       /* Packets received from this neighbor */
+
+    /*
+     * Hebbian Synaptic Weight (v0.5)
+     * Implements "neurons that fire together, wire together"
+     * Range: 0 (dead connection) to 255 (perfect connection)
+     * Initial value: 128 (neutral)
+     * LTP: Successful comms strengthen connection (+15)
+     * LTD: Failed comms weaken connection (-40)
+     */
+    uint8_t  synaptic_weight;   /* Connection strength (0-255) */
 };
 
 /* ==========================================================================
@@ -705,7 +717,90 @@ struct nanos_state {
         uint32_t objectives_found;
         uint32_t moves_made;
         uint32_t reports_sent;
+
+        /* =======================================================================
+         * Stigmergia - Digital Pheromones (v0.5)
+         * "Ants don't memorize the map; they leave chemicals that evaporate"
+         *
+         * Memory layout: 16x16 grid × 2 bytes = 512 bytes
+         * Each byte stores 2 pheromone types as nibbles:
+         *   pheromones[y][x][0] = [danger:4][queen:4]
+         *   pheromones[y][x][1] = [resource:4][avoid:4]
+         * ======================================================================= */
+        #define STIGMERGIA_GRID_SIZE    16  /* 16x16 coarse grid */
+
+        struct {
+            uint8_t data[2];    /* [danger|queen], [resource|avoid] */
+        } pheromones[16][16];   /* 512 bytes */
+
+        uint32_t stigmergia_last_decay;     /* Tick of last decay */
+        uint32_t stigmergia_last_share;     /* Tick of last broadcast */
+        uint32_t stigmergia_marks_total;    /* Total marks emitted */
+        uint32_t stigmergia_decays_total;   /* Total decay cycles */
     } terrain;
+
+    /* ==========================================================================
+     * Distributed Black Box (v0.5) - "El Último Aliento"
+     *
+     * When nodes die, they transmit a "Last Will" to trusted neighbors.
+     * This creates a distributed forensic record of what happened to dead nodes.
+     * "The dead speak through the living"
+     * ========================================================================== */
+    #define BLACKBOX_MAX_WILLS      8       /* Max last wills stored */
+    #define BLACKBOX_MAX_EVENTS     5       /* Events per will */
+
+    /* Death reasons */
+    #define DEATH_NATURAL           0x00    /* Normal apoptosis (lifespan) */
+    #define DEATH_HEAP_EXHAUSTED    0x01    /* Out of memory */
+    #define DEATH_CORRUPTION        0x02    /* Detected memory corruption */
+    #define DEATH_ATTACK_DETECTED   0x03    /* Security attack detected */
+    #define DEATH_QUEEN_ORDER       0x04    /* Ordered to die by queen */
+    #define DEATH_REPLACED          0x05    /* Replaced by new node */
+    #define DEATH_ISOLATION         0x06    /* No neighbors for too long */
+    #define DEATH_UNKNOWN           0xFF    /* Unknown cause */
+
+    /* Security event types for forensics */
+    #define EVENT_BAD_MAC           0x01    /* Failed MAC verification */
+    #define EVENT_REPLAY            0x02    /* Replay attack blocked */
+    #define EVENT_RATE_LIMIT        0x03    /* Rate limit triggered */
+    #define EVENT_BLACKLIST         0x04    /* Node blacklisted */
+    #define EVENT_JAMMING           0x05    /* Jamming detected */
+    #define EVENT_CORRUPTION        0x06    /* Memory corruption */
+    #define EVENT_KEY_ROTATE        0x07    /* Key rotation occurred */
+
+    struct {
+        /* Last will entries from dead neighbors */
+        struct {
+            uint32_t node_id;               /* Who died */
+            uint32_t death_tick;            /* When received */
+            uint8_t  death_reason;          /* DEATH_* */
+            uint8_t  uptime_hours;          /* How long node lived */
+
+            /* Security statistics at death */
+            uint16_t bad_mac_count;
+            uint16_t replay_count;
+            uint16_t rate_limit_count;
+            uint8_t  blacklist_count;
+
+            /* Last security events (ring buffer) */
+            struct {
+                uint32_t tick;              /* When event occurred */
+                uint8_t  type;              /* EVENT_* */
+                uint16_t source_node;       /* Related node if any */
+            } events[BLACKBOX_MAX_EVENTS];
+            uint8_t event_count;
+
+            /* Network state at death */
+            uint8_t  neighbor_count;
+            uint8_t  role;
+            uint8_t  distance_to_queen;
+        } wills[BLACKBOX_MAX_WILLS];
+
+        uint8_t  will_count;                /* Number of stored wills */
+        uint8_t  will_index;                /* Next write slot (circular) */
+        uint32_t wills_received;            /* Total wills ever received */
+        uint32_t wills_relayed;             /* Wills relayed to others */
+    } blackbox;
 };
 
 extern struct nanos_state g_state;

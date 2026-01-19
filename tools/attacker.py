@@ -18,7 +18,7 @@ from typing import List, Optional
 # NERT Protocol Constants
 NERT_MAGIC = 0x4E
 NERT_VERSION = 0x10
-NERT_HEADER_SIZE = 20  # Full header for x86
+NERT_HEADER_SIZE = 20  # Full header for x86: BBHHHHBBHBBxxI (with padding)
 
 # Reliability Classes
 CLASS_FIRE_FORGET = 0x00
@@ -67,7 +67,7 @@ class NERTPacket:
     def pack(self) -> bytes:
         """Pack packet into binary format"""
         header = struct.pack(
-            '<BBHHHHBBHHBBI',
+            '<BBHHHHBBHBBI',
             self.magic,
             self.version_class,
             self.node_id,
@@ -89,7 +89,7 @@ class NERTPacket:
         if len(data) < NERT_HEADER_SIZE:
             return None
 
-        header = struct.unpack('<BBHHHHBBHHBBI', data[:NERT_HEADER_SIZE])
+        header = struct.unpack('<BBHHHHBBHBBI', data[:NERT_HEADER_SIZE])
         pkt = NERTPacket(
             magic=header[0],
             version_class=header[1],

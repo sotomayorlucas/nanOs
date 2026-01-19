@@ -187,7 +187,7 @@
 {\Large\color{nanosgray} Nano Operating System for Disposable Nodes}\\[2cm]
 
 {\LARGE\bfseries Manual Técnico}\\[0.5cm]
-{\large Versión 0.3}\\[2cm]
+{\large Versión 0.5}\\[2cm]
 
 \begin{tikzpicture}
     \draw[nanosprimary, line width=2pt] (0,0) -- (10,0);
@@ -199,6 +199,9 @@
 {\large Arquitectura del Sistema}\\
 {\large Protocolo de Feromonas}\\
 {\large NERT: Ephemeral Reliable Transport}\\
+{\large Enrutamiento Hebbiano (v0.5)}\\
+{\large Stigmergia: Feromonas Digitales (v0.5)}\\
+{\large Black Box Distribuida (v0.5)}\\
 {\large Guía de Implementación}\\[2cm]
 
 \vfill
@@ -215,7 +218,7 @@
 \vspace*{\fill}
 \begin{center}
 \textbf{NanOS Technical Manual}\\
-Version 0.3\\[1cm]
+Version 0.5\\[1cm]
 
 Copyright \textcopyright{} 2026 NanOS Project\\[0.5cm]
 
@@ -858,6 +861,902 @@ El enrutamiento por gradiente permite dirigir mensajes hacia la reina:
 \caption{Enrutamiento por gradiente hacia la reina}
 \label{fig:gradient}
 \end{figure}
+
+\section{Enrutamiento Hebbiano (v0.5)}
+
+La versión 0.5 introduce \textbf{Enrutamiento Hebbiano}, inspirado en la neurociencia:
+\textit{``Las neuronas que se disparan juntas, se conectan juntas''}.
+
+\subsection{Peso Sináptico}
+
+Cada conexión con un vecino tiene un \textbf{peso sináptico} $w \in [1, 255]$:
+
+\begin{lstlisting}[caption={Campos de peso sináptico}]
+struct neighbor_entry {
+    uint32_t node_id;
+    uint32_t last_seen;
+    uint8_t  role;
+    uint8_t  distance;
+    uint16_t packets;
+    uint8_t  synaptic_weight;  /* v0.5: 0-255, inicial: 128 */
+};
+\end{lstlisting}
+
+\subsection{Regla de Aprendizaje}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % Success path
+    \node[draw, rounded corners, fill=nanosgreen!30, minimum width=3cm] (success) at (0,2) {
+        \begin{tabular}{c}
+            \textbf{Éxito (LTP)}\\
+            \small ACK recibido
+        \end{tabular}
+    };
+    \node[font=\large, nanosgreen] at (4,2) {$w \leftarrow \min(255, w + 15)$};
+
+    % Failure path
+    \node[draw, rounded corners, fill=nanosaccent!30, minimum width=3cm] (fail) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Fallo (LTD)}\\
+            \small Timeout/Retries
+        \end{tabular}
+    };
+    \node[font=\large, nanosaccent] at (4,0) {$w \leftarrow \max(1, w - 40)$};
+
+    % STDP bonus
+    \node[draw, rounded corners, fill=nanosprimary!20, minimum width=3cm] (stdp) at (0,-2) {
+        \begin{tabular}{c}
+            \textbf{STDP Bonus}\\
+            \small ACK $< 100$ms
+        \end{tabular}
+    };
+    \node[font=\large, nanosprimary] at (4,-2) {$w \leftarrow \min(255, w + 5)$};
+\end{tikzpicture}
+\caption{Reglas de aprendizaje Hebbiano}
+\label{fig:hebbian-rules}
+\end{figure}
+
+\begin{warningbox}[Asimetría Castigo/Recompensa]
+El castigo ($-40$) es casi 3 veces más severo que la recompensa ($+15$).
+Esto asegura que el enjambre aprenda rápidamente a evitar nodos poco confiables.
+\end{warningbox}
+
+\subsection{Fórmula de Costo Neural}
+
+El costo de ruta combina distancia y confiabilidad:
+
+\begin{equation}
+\text{Costo}(j) = 10 \cdot d_j + \frac{255 - w_j}{8}
+\end{equation}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccc}
+\toprule
+\textbf{Distancia} & \textbf{Peso} & \textbf{Costo} \\
+\midrule
+1 hop & 255 (perfecto) & $10 + 0 = 10$ \\
+1 hop & 128 (neutral) & $10 + 15 = 25$ \\
+1 hop & 1 (muerto) & $10 + 31 = 41$ \\
+2 hops & 255 (perfecto) & $20 + 0 = 20$ \\
+\bottomrule
+\end{tabular}
+\caption{Ejemplos de cálculo de costo neural}
+\label{tab:neural-cost}
+\end{table}
+
+\begin{infobox}[Insight Clave]
+Una ruta de 2 saltos confiable (costo 20) es mejor que una ruta de 1 salto
+poco confiable (costo 41). El enjambre \textbf{aprende a rodear} nodos problemáticos.
+\end{infobox}
+
+%-------------------------------------------------------------------------------
+\chapter{Stigmergia: Feromonas Digitales (v0.5)}
+%-------------------------------------------------------------------------------
+
+\section{Inspiración Biológica}
+
+Las hormigas no memorizan mapas; dejan \textbf{químicos que se evaporan}. Este
+mecanismo de coordinación indirecta a través de modificación del ambiente se
+llama \textbf{stigmergia}. NanOS v0.5 implementa este concepto digitalmente.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % Biological analogy
+    \node[draw, rounded corners, fill=nanosgreen!20, minimum width=4cm,
+          minimum height=2.5cm] (bio) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Hormigas}\\
+            \small Feromona química\\
+            \small Se evapora con el tiempo\\
+            \small Atrae o repele
+        \end{tabular}
+    };
+
+    \node[draw, rounded corners, fill=nanosprimary!20, minimum width=4cm,
+          minimum height=2.5cm] (digital) at (7,0) {
+        \begin{tabular}{c}
+            \textbf{NanOS Stigmergia}\\
+            \small Feromona digital (4 bits)\\
+            \small Decae 1/segundo\\
+            \small Modifica costo de ruta
+        \end{tabular}
+    };
+
+    \draw[arrow, very thick, nanosaccent] (bio) -- node[above] {Analogía} (digital);
+\end{tikzpicture}
+\caption{Analogía biológica de Stigmergia}
+\label{fig:stigmergia-bio}
+\end{figure}
+
+\section{Tipos de Feromonas}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clcp{5cm}}
+\toprule
+\textbf{Código} & \textbf{Tipo} & \textbf{Efecto} & \textbf{Uso} \\
+\midrule
+0 & DANGER & Repulsión (+8/nivel) & Jamming, ataques, nodos maliciosos \\
+1 & QUEEN & Atracción (-2/nivel) & Camino hacia la reina \\
+2 & RESOURCE & Neutral & Marcador de objetivos \\
+3 & AVOID & Repulsión (+4/nivel) & Zonas subóptimas (no peligrosas) \\
+\bottomrule
+\end{tabular}
+\caption{Tipos de feromonas digitales}
+\label{tab:pheromone-types-stig}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % Pheromone type icons
+    \node[draw, circle, fill=nanosaccent!60, minimum size=2cm, align=center] (danger) at (0,0) {
+        \textbf{DANGER}\\
+        \tiny Repulsión
+    };
+    \node[draw, circle, fill=nanosgreen!50, minimum size=2cm, align=center] (queen) at (4,0) {
+        \textbf{QUEEN}\\
+        \tiny Atracción
+    };
+    \node[draw, circle, fill=nanosprimary!40, minimum size=2cm, align=center] (resource) at (8,0) {
+        \textbf{RESOURCE}\\
+        \tiny Neutro
+    };
+    \node[draw, circle, fill=nanosgray!40, minimum size=2cm, align=center] (avoid) at (12,0) {
+        \textbf{AVOID}\\
+        \tiny Repulsión
+    };
+
+    % Effect arrows
+    \draw[<-,very thick,nanosaccent] (danger.south) -- ++(0,-1.5) node[below,font=\small] {+8/nivel};
+    \draw[->,very thick,nanosgreen] (queen.south) -- ++(0,-1.5) node[below,font=\small] {-2/nivel};
+    \node[below=1.5cm of resource,font=\small] {0};
+    \draw[<-,very thick,nanosgray] (avoid.south) -- ++(0,-1.5) node[below,font=\small] {+4/nivel};
+
+    % Labels
+    \node[font=\tiny] at (0,-3.5) {Jamming, ataques};
+    \node[font=\tiny] at (4,-3.5) {Rastro a reina};
+    \node[font=\tiny] at (8,-3.5) {Objetivos};
+    \node[font=\tiny] at (12,-3.5) {Subóptimo};
+\end{tikzpicture}
+\caption{Tipos de feromonas y su efecto en el costo de movimiento}
+\label{fig:pheromone-types-visual}
+\end{figure}
+
+\section{Estructura de Datos}
+
+\begin{lstlisting}[caption={Almacenamiento de feromonas}]
+/* Cada celda almacena 4 tipos en 2 bytes (nibble packing) */
+struct stigmergia_cell {
+    uint8_t data[2];  /* [danger|queen], [resource|avoid] */
+};
+
+/* Grid 16x16 cubriendo terreno 32x32 (escala 2:1) */
+struct stigmergia_cell pheromones[16][16];  /* 512 bytes total */
+
+/* Acceso a intensidad (0-15) */
+uint8_t stigmergia_get(uint8_t x, uint8_t y, uint8_t type);
+void stigmergia_mark(uint8_t x, uint8_t y, uint8_t type, uint8_t intensity);
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % Byte 0
+    \node[font=\small\bfseries] at (-2, 1.5) {Byte 0:};
+    \draw[fill=nanosaccent!40] (0,1) rectangle (2,2);
+    \draw[fill=nanosgreen!40] (2,1) rectangle (4,2);
+    \node at (1, 1.5) {\small DANGER};
+    \node at (3, 1.5) {\small QUEEN};
+
+    % Byte 1
+    \node[font=\small\bfseries] at (-2, -0.5) {Byte 1:};
+    \draw[fill=nanosprimary!40] (0,-1) rectangle (2,0);
+    \draw[fill=nanosgray!40] (2,-1) rectangle (4,0);
+    \node at (1, -0.5) {\small RESOURCE};
+    \node at (3, -0.5) {\small AVOID};
+
+    % Bit markers
+    \foreach \x/\bit in {0/7, 0.5/6, 1/5, 1.5/4, 2/3, 2.5/2, 3/1, 3.5/0} {
+        \node[font=\tiny, above] at (\x+0.25, 2) {\bit};
+    }
+
+    % Nibble brackets
+    \draw[decorate, decoration={brace, amplitude=5pt}] (0,2.3) -- (2,2.3)
+        node[midway, above=5pt, font=\tiny] {4 bits (0-15)};
+    \draw[decorate, decoration={brace, amplitude=5pt}] (2,2.3) -- (4,2.3)
+        node[midway, above=5pt, font=\tiny] {4 bits (0-15)};
+
+    % Total annotation
+    \draw[decorate, decoration={brace, amplitude=8pt, mirror}] (4.2,2) -- (4.2,-1)
+        node[midway, right=10pt, font=\small, align=left] {2 bytes\\por celda};
+
+    % Grid visualization
+    \node[font=\small\bfseries] at (8, 1.5) {Grid 16×16:};
+    \draw[step=0.3, gray!50] (6,-1) grid (9.8,2.8);
+    \draw[thick] (6,-1) rectangle (9.8,2.8);
+
+    % Annotation
+    \node[font=\tiny, align=center] at (7.9, -1.8) {16 × 16 × 2 bytes\\= 512 bytes total};
+\end{tikzpicture}
+\caption{Nibble packing: 4 tipos de feromona en 2 bytes por celda}
+\label{fig:nibble-packing}
+\end{figure}
+
+\section{Decaimiento Temporal}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm,
+        height=6cm,
+        xlabel={Tiempo (segundos)},
+        ylabel={Intensidad de feromona},
+        xmin=0, xmax=20,
+        ymin=0, ymax=17,
+        grid=major,
+        legend pos=north east
+    ]
+
+    % Decay from max (15)
+    \addplot[thick, nanosaccent, mark=*] coordinates {
+        (0, 15) (1, 14) (2, 13) (3, 12) (4, 11) (5, 10)
+        (6, 9) (7, 8) (8, 7) (9, 6) (10, 5) (11, 4)
+        (12, 3) (13, 2) (14, 1) (15, 0) (16, 0) (17, 0)
+    };
+    \addlegendentry{Intensidad inicial = 15}
+
+    % Decay from medium (8)
+    \addplot[thick, nanosprimary, mark=square*] coordinates {
+        (0, 8) (1, 7) (2, 6) (3, 5) (4, 4) (5, 3)
+        (6, 2) (7, 1) (8, 0) (9, 0) (10, 0)
+    };
+    \addlegendentry{Intensidad inicial = 8}
+
+    % Propagation threshold
+    \addplot[dashed, nanosgreen] coordinates {(0, 6) (20, 6)};
+    \addlegendentry{Umbral de propagación}
+
+    \end{axis}
+\end{tikzpicture}
+\caption{Decaimiento de feromonas: -1 cada segundo}
+\label{fig:pheromone-decay}
+\end{figure}
+
+\begin{warningbox}[Evaporación]
+La feromona \textbf{se pierde} si no es reforzada. Un peligro detectado hace
+15 segundos ya no existe en el mapa. Esto evita información obsoleta.
+\end{warningbox}
+
+\section{Modificación de Costo de Movimiento}
+
+La presencia de feromonas modifica el costo de moverse a una celda:
+
+\begin{equation}
+\text{Costo}_{\text{total}} = \text{Costo}_{\text{base}} + 8 \cdot I_{\text{DANGER}} + 4 \cdot I_{\text{AVOID}} - 2 \cdot I_{\text{QUEEN}}
+\end{equation}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Situación} & \textbf{Feromonas} & \textbf{Modificador} & \textbf{Costo Final} \\
+\midrule
+Celda normal & Ninguna & 0 & 10 \\
+Zona peligrosa & DANGER=15 & +120 & 130 \\
+Cerca de reina & QUEEN=10 & -20 & -10 (atracción) \\
+Zona subóptima & AVOID=8 & +32 & 42 \\
+Mixta & DANGER=5, QUEEN=3 & +40-6=+34 & 44 \\
+\bottomrule
+\end{tabular}
+\caption{Ejemplos de modificación de costo}
+\label{tab:cost-mod}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.65]
+    % Grid background
+    \foreach \x in {0,...,7} {
+        \foreach \y in {0,...,5} {
+            \fill[white] (\x*1.2,\y*1.2) rectangle (\x*1.2+1.1,\y*1.2+1.1);
+            \draw[gray!30] (\x*1.2,\y*1.2) rectangle (\x*1.2+1.1,\y*1.2+1.1);
+        }
+    }
+
+    % Danger zone (red gradient)
+    \fill[nanosaccent!80] (3.6,2.4) rectangle (4.7,3.5);
+    \fill[nanosaccent!60] (2.4,2.4) rectangle (3.5,3.5);
+    \fill[nanosaccent!60] (4.8,2.4) rectangle (5.9,3.5);
+    \fill[nanosaccent!40] (3.6,1.2) rectangle (4.7,2.3);
+    \fill[nanosaccent!40] (3.6,3.6) rectangle (4.7,4.7);
+    \node[white, font=\tiny\bfseries] at (4.15, 2.95) {DANGER};
+    \node[font=\tiny] at (4.15, 2.55) {130};
+
+    % Queen attraction zone (green)
+    \fill[nanosgreen!60] (7.2,4.8) rectangle (8.3,5.9);
+    \fill[nanosgreen!40] (6,4.8) rectangle (7.1,5.9);
+    \fill[nanosgreen!40] (7.2,3.6) rectangle (8.3,4.7);
+    \node[font=\tiny\bfseries] at (7.75, 5.35) {QUEEN};
+
+    % Start and End nodes
+    \node[draw, circle, fill=nanosprimary!60, minimum size=0.8cm] (start) at (0.55, 0.55) {S};
+    \node[draw, circle, fill=nanosgreen!60, minimum size=0.8cm] (end) at (7.75, 5.35) {Q};
+
+    % Path 1: Direct (through danger) - BAD
+    \draw[dashed, nanosaccent, very thick] (0.55, 0.55) -- (4.15, 2.95);
+    \draw[dashed, nanosaccent, very thick] (4.15, 2.95) -- (7.75, 5.35);
+    \node[nanosaccent, font=\tiny, align=center] at (2.5, 2.5) {Ruta directa\\Costo: 250+};
+
+    % Path 2: Around danger - GOOD
+    \draw[very thick, nanosgreen!80!black, ->] (0.55, 0.55) -- (1.75, 0.55) -- (1.75, 4.75) -- (7.75, 5.35);
+    \node[nanosgreen!80!black, font=\tiny, align=center] at (1, 3.5) {Ruta segura\\Costo: 80};
+
+    % Legend
+    \node[draw, fill=nanosaccent!60, minimum width=0.5cm, minimum height=0.3cm] at (10, 5) {};
+    \node[right, font=\tiny] at (10.4, 5) {DANGER (alto costo)};
+    \node[draw, fill=nanosgreen!50, minimum width=0.5cm, minimum height=0.3cm] at (10, 4.3) {};
+    \node[right, font=\tiny] at (10.4, 4.3) {QUEEN (atracción)};
+    \draw[nanosgreen!80!black, very thick, ->] (9.8, 3.6) -- (10.3, 3.6);
+    \node[right, font=\tiny] at (10.4, 3.6) {Ruta óptima};
+\end{tikzpicture}
+\caption{Efecto de feromonas en pathfinding: el enjambre rodea zonas peligrosas}
+\label{fig:pathfinding-stigmergia}
+\end{figure}
+
+\section{Propagación de Feromonas}
+
+Las feromonas de alta intensidad se propagan a celdas vecinas:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Center cell (source)
+    \node[draw, fill=nanosaccent!60, minimum size=1.5cm] (center) at (0,0) {\textbf{15}};
+
+    % Adjacent cells (propagated)
+    \node[draw, fill=nanosaccent!40, minimum size=1.5cm] at (2,0) {12};
+    \node[draw, fill=nanosaccent!40, minimum size=1.5cm] at (-2,0) {12};
+    \node[draw, fill=nanosaccent!40, minimum size=1.5cm] at (0,2) {12};
+    \node[draw, fill=nanosaccent!40, minimum size=1.5cm] at (0,-2) {12};
+
+    % Diagonal cells (weaker)
+    \node[draw, fill=nanosaccent!20, minimum size=1.5cm] at (2,2) {9};
+    \node[draw, fill=nanosaccent!20, minimum size=1.5cm] at (-2,2) {9};
+    \node[draw, fill=nanosaccent!20, minimum size=1.5cm] at (2,-2) {9};
+    \node[draw, fill=nanosaccent!20, minimum size=1.5cm] at (-2,-2) {9};
+
+    % Arrows
+    \draw[arrow, nanosaccent] (0.8,0) -- (1.2,0);
+    \draw[arrow, nanosaccent] (-0.8,0) -- (-1.2,0);
+    \draw[arrow, nanosaccent] (0,0.8) -- (0,1.2);
+    \draw[arrow, nanosaccent] (0,-0.8) -- (0,-1.2);
+
+    % Legend
+    \node[font=\small, anchor=west] at (4,1) {Intensidad original: 15};
+    \node[font=\small, anchor=west] at (4,0) {Propagación: -3 por salto};
+    \node[font=\small, anchor=west] at (4,-1) {Umbral mínimo: 6};
+
+\end{tikzpicture}
+\caption{Propagación de feromona DANGER}
+\label{fig:propagation}
+\end{figure}
+
+\section{API de Stigmergia}
+
+\begin{lstlisting}[caption={Funciones principales de Stigmergia}]
+/* Inicializar sistema (limpia todas las feromonas) */
+void stigmergia_init(void);
+
+/* Marcar feromona en coordenadas de terreno */
+void stigmergia_mark(uint8_t terrain_x, uint8_t terrain_y,
+                     uint8_t type, uint8_t intensity);
+
+/* Obtener intensidad en coordenadas */
+uint8_t stigmergia_get(uint8_t terrain_x, uint8_t terrain_y,
+                       uint8_t type);
+
+/* Aplicar decaimiento (llamar cada segundo) */
+void stigmergia_decay(void);
+
+/* Calcular modificador de costo para pathfinding */
+int8_t stigmergia_cost_modifier(uint8_t terrain_x, uint8_t terrain_y);
+
+/* Emitir feromona de peligro (convenience) */
+void stigmergia_emit_danger(uint8_t intensity);
+
+/* Emitir rastro hacia la reina */
+void stigmergia_emit_queen_trail(void);
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{Black Box Distribuida: ``El Último Aliento'' (v0.5)}
+%-------------------------------------------------------------------------------
+
+\section{Problema: Evidencia Forense Perdida}
+
+Cuando un nodo es comprometido y terminado, su evidencia forense se pierde.
+Un atacante inteligente podría:
+
+\begin{enumerate}
+    \item Comprometer un nodo
+    \item Extraer información sensible
+    \item Forzar su ``suicidio'' para eliminar rastros
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Timeline
+    \draw[->, thick] (0,0) -- (14,0) node[right, font=\small] {tiempo};
+
+    % Attack phases
+    \fill[nanosprimary!30] (0,-0.5) rectangle (3,0.5);
+    \fill[nanosaccent!30] (3,-0.5) rectangle (7,0.5);
+    \fill[nanosaccent!60] (7,-0.5) rectangle (10,0.5);
+    \fill[nanosgray!40] (10,-0.5) rectangle (13,0.5);
+
+    % Phase labels
+    \node[font=\tiny, align=center] at (1.5, 0) {Nodo\\operando};
+    \node[font=\tiny, align=center] at (5, 0) {Nodo\\comprometido};
+    \node[font=\tiny, align=center] at (8.5, 0) {Atacante\\extrae data};
+    \node[font=\tiny, align=center] at (11.5, 0) {Nodo\\``suicidado''};
+
+    % Events below timeline
+    \node[font=\tiny, nanosaccent] at (3, -1.2) {Ataque};
+    \draw[->, nanosaccent] (3, -1) -- (3, -0.6);
+
+    \node[font=\tiny, nanosaccent] at (10, -1.2) {Eliminación};
+    \draw[->, nanosaccent] (10, -1) -- (10, -0.6);
+
+    % Without Black Box
+    \node[font=\small\bfseries, nanosaccent] at (7, -2.5) {SIN Black Box:};
+    \node[font=\tiny, align=center] at (7, -3.2) {Evidencia perdida para siempre\\El enjambre no sabe qué pasó};
+
+    % Evidence icon (crossed out)
+    \node[draw, fill=nanosgray!20, minimum size=0.8cm] at (11.5, -2.8) {\tiny Logs};
+    \draw[nanosaccent, very thick] (11, -2.3) -- (12, -3.3);
+    \draw[nanosaccent, very thick] (11, -3.3) -- (12, -2.3);
+\end{tikzpicture}
+\caption{Escenario de ataque sin Black Box: la evidencia se pierde al morir el nodo}
+\label{fig:attack-timeline}
+\end{figure}
+
+\begin{warningbox}[Escenario de Ataque]
+Sin Black Box: El atacante elimina el nodo y toda evidencia de compromiso
+desaparece. El enjambre no sabe qué pasó.
+\end{warningbox}
+
+\section{Solución: El Último Aliento}
+
+Antes de morir, cada nodo transmite un ``testamento'' (Last Will) a vecinos
+de confianza. Incluso si el nodo fue hackeado y suicidado, su evidencia
+sobrevive en el enjambre.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % WITHOUT Black Box
+    \node[font=\small\bfseries, nanosaccent] at (3, 3.5) {SIN Black Box};
+
+    % Timeline without
+    \draw[->, thick] (0, 2) -- (6, 2);
+    \fill[nanosaccent!30] (3, 1.5) rectangle (4.5, 2.5);
+    \node[font=\tiny] at (3.75, 2) {Ataque};
+    \fill[nanosgray!50] (4.5, 1.5) rectangle (6, 2.5);
+    \node[font=\tiny] at (5.25, 2) {Muerte};
+
+    % Evidence lost
+    \node[draw, fill=nanosaccent!20, rounded corners, font=\tiny] at (3, 0.5) {Evidencia};
+    \draw[nanosaccent, very thick] (2.5, 0) -- (3.5, 1);
+    \draw[nanosaccent, very thick] (2.5, 1) -- (3.5, 0);
+    \node[font=\tiny, nanosaccent] at (3, -0.3) {PERDIDA};
+
+    % WITH Black Box
+    \node[font=\small\bfseries, nanosgreen!80!black] at (11, 3.5) {CON Black Box};
+
+    % Timeline with
+    \draw[->, thick] (8, 2) -- (14, 2);
+    \fill[nanosaccent!30] (11, 1.5) rectangle (12.5, 2.5);
+    \node[font=\tiny] at (11.75, 2) {Ataque};
+    \fill[nanosgray!50] (12.5, 1.5) rectangle (14, 2.5);
+    \node[font=\tiny] at (13.25, 2) {Muerte};
+
+    % Evidence transmitted
+    \node[draw, fill=nanosgreen!30, rounded corners, font=\tiny] at (11, 0.5) {Evidencia};
+    \draw[->, very thick, nanosgreen!80!black] (11.6, 0.5) -- (12.8, 0.5);
+    \draw[->, very thick, nanosgreen!80!black] (11.6, 0.7) -- (12.8, 1.2);
+    \draw[->, very thick, nanosgreen!80!black] (11.6, 0.3) -- (12.8, -0.2);
+
+    % Survivors
+    \node[draw, circle, fill=nanosgreen!40, minimum size=0.6cm, font=\tiny] at (13.5, 0.5) {T1};
+    \node[draw, circle, fill=nanosgreen!40, minimum size=0.6cm, font=\tiny] at (13.5, 1.2) {T2};
+    \node[draw, circle, fill=nanosgreen!40, minimum size=0.6cm, font=\tiny] at (13.5, -0.2) {T3};
+    \node[font=\tiny, nanosgreen!80!black] at (13.5, -0.9) {SOBREVIVE};
+
+    % Comparison arrow
+    \draw[->, very thick, double] (6.5, 1) -- (7.5, 1);
+    \node[font=\tiny, above] at (7, 1) {vs};
+\end{tikzpicture}
+\caption{Comparación: sin Black Box la evidencia se pierde, con Black Box sobrevive}
+\label{fig:blackbox-comparison}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node/.style={draw, circle, minimum size=1.5cm, text centered, font=\small},
+    scale=0.85
+]
+    % Dying node
+    \node[node, fill=nanosaccent!50, line width=2pt] (dying) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Dying}\\
+            \tiny Node
+        \end{tabular}
+    };
+
+    % Trusted neighbors
+    \node[node, fill=nanosgreen!40] (t1) at (4,2) {
+        \begin{tabular}{c}
+            T1\\
+            \tiny w=240
+        \end{tabular}
+    };
+    \node[node, fill=nanosgreen!40] (t2) at (4,0) {
+        \begin{tabular}{c}
+            T2\\
+            \tiny w=220
+        \end{tabular}
+    };
+    \node[node, fill=nanosgreen!40] (t3) at (4,-2) {
+        \begin{tabular}{c}
+            T3\\
+            \tiny w=200
+        \end{tabular}
+    };
+
+    % Untrusted neighbor (not selected)
+    \node[node, fill=nanosgray!30, dashed] (u1) at (-3,1.5) {
+        \begin{tabular}{c}
+            U1\\
+            \tiny w=50
+        \end{tabular}
+    };
+
+    % Last Will transmission
+    \draw[arrow, very thick, nanosaccent] (dying) -- node[above, font=\scriptsize] {Last Will} (t1);
+    \draw[arrow, very thick, nanosaccent] (dying) -- node[above, font=\scriptsize] {Last Will} (t2);
+    \draw[arrow, very thick, nanosaccent] (dying) -- node[below, font=\scriptsize] {Last Will} (t3);
+
+    % No transmission to untrusted
+    \draw[dashed, nanosgray] (dying) -- (u1);
+    \node[font=\tiny, nanosgray] at (-1.8,1.2) {No enviado};
+
+    % Legend
+    \node[font=\small, anchor=west] at (6,2) {Testamento enviado a};
+    \node[font=\small, anchor=west] at (6,1.5) {vecinos con mayor};
+    \node[font=\small, anchor=west] at (6,1) {peso Hebbiano};
+
+\end{tikzpicture}
+\caption{Transmisión del Último Aliento a vecinos de confianza}
+\label{fig:last-will}
+\end{figure}
+
+\section{Contenido del Testamento}
+
+\begin{lstlisting}[caption={Estructura del Last Will}]
+/* Razones de muerte */
+#define DEATH_NATURAL           0x00  /* Vejez/timeout normal */
+#define DEATH_HEAP_EXHAUSTED    0x01  /* Sin memoria */
+#define DEATH_CORRUPTION        0x02  /* Corrupcion detectada */
+#define DEATH_ATTACK_DETECTED   0x03  /* Ataque en progreso */
+#define DEATH_QUEEN_ORDER       0x04  /* Orden de la reina */
+#define DEATH_ISOLATION         0x05  /* Sin contacto con enjambre */
+
+/* Tipos de eventos de seguridad */
+#define EVENT_BAD_MAC           0x01  /* MAC invalido recibido */
+#define EVENT_REPLAY            0x02  /* Intento de replay */
+#define EVENT_RATE_LIMIT        0x03  /* Rate limit excedido */
+#define EVENT_BLACKLIST         0x04  /* Nodo en blacklist */
+#define EVENT_JAMMING           0x05  /* Jamming detectado */
+#define EVENT_CORRUPTION        0x06  /* Corrupcion de memoria */
+
+/* Contenido del testamento */
+struct last_will {
+    uint32_t node_id;           /* ID del nodo que muere */
+    uint8_t  death_reason;      /* DEATH_* codigo */
+    uint8_t  uptime_hours;      /* Horas de vida */
+    uint16_t bad_mac_count;     /* MACs invalidos recibidos */
+    uint16_t replay_count;      /* Intentos de replay */
+    uint16_t rate_limit_hits;   /* Veces rate limited */
+
+    /* Ultimos 8 eventos de seguridad */
+    struct {
+        uint8_t  type;          /* EVENT_* tipo */
+        uint16_t source_node;   /* Nodo relacionado */
+        uint32_t timestamp;     /* Cuando ocurrio */
+    } events[8];
+};
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.75]
+    % Death reasons column
+    \node[font=\small\bfseries] at (2, 4.5) {Razones de Muerte};
+
+    \node[draw, rounded corners, fill=nanosgreen!30, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, 3.5) {\small NATURAL (0x00)};
+    \node[draw, rounded corners, fill=nanosprimary!30, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, 2.5) {\small HEAP\_EXHAUSTED};
+    \node[draw, rounded corners, fill=nanosaccent!30, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, 1.5) {\small CORRUPTION};
+    \node[draw, rounded corners, fill=nanosaccent!50, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, 0.5) {\small ATTACK\_DETECTED};
+    \node[draw, rounded corners, fill=nanossecondary!30, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, -0.5) {\small QUEEN\_ORDER};
+    \node[draw, rounded corners, fill=nanosgray!30, minimum width=3.5cm, minimum height=0.7cm]
+        at (2, -1.5) {\small ISOLATION};
+
+    % Severity indicator
+    \draw[->, very thick, nanosaccent] (4.5, 3.5) -- (4.5, -1.5);
+    \node[font=\tiny, rotate=90] at (5, 1) {Severidad};
+
+    % Security events column
+    \node[font=\small\bfseries] at (9, 4.5) {Eventos de Seguridad};
+
+    \node[draw, rounded corners, fill=nanosaccent!20, minimum width=3cm, minimum height=0.6cm]
+        at (9, 3.5) {\small BAD\_MAC};
+    \node[draw, rounded corners, fill=nanosaccent!30, minimum width=3cm, minimum height=0.6cm]
+        at (9, 2.7) {\small REPLAY};
+    \node[draw, rounded corners, fill=nanosaccent!40, minimum width=3cm, minimum height=0.6cm]
+        at (9, 1.9) {\small RATE\_LIMIT};
+    \node[draw, rounded corners, fill=nanosaccent!50, minimum width=3cm, minimum height=0.6cm]
+        at (9, 1.1) {\small BLACKLIST};
+    \node[draw, rounded corners, fill=nanosaccent!60, minimum width=3cm, minimum height=0.6cm]
+        at (9, 0.3) {\small JAMMING};
+    \node[draw, rounded corners, fill=nanosaccent!70, minimum width=3cm, minimum height=0.6cm]
+        at (9, -0.5) {\small CORRUPTION};
+
+    % Connection
+    \draw[->, thick, nanosgray] (5.5, 1) -- (6.8, 1);
+    \node[font=\tiny, above] at (6.15, 1) {registra};
+\end{tikzpicture}
+\caption{Códigos de muerte y eventos de seguridad registrados en el testamento}
+\label{fig:death-reasons-visual}
+\end{figure}
+
+\section{Flujo de Operación}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    phase/.style={draw, rounded corners, minimum width=3cm,
+                  minimum height=1.5cm, text centered, font=\small},
+    scale=0.8
+]
+    % Phases
+    \node[phase, fill=nanosprimary!20] (record) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Registro}\\
+            \small blackbox\_record\_event()\\
+            \small durante operación
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanosaccent!20] (trigger) at (5.5,0) {
+        \begin{tabular}{c}
+            \textbf{Trigger}\\
+            \small cell\_apoptosis()\\
+            \small detecta muerte
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanosgreen!20] (emit) at (11,0) {
+        \begin{tabular}{c}
+            \textbf{Emisión}\\
+            \small blackbox\_emit\_last\_will()\\
+            \small a vecinos confiables
+        \end{tabular}
+    };
+
+    \node[phase, fill=nanossecondary!20] (store) at (5.5,-3) {
+        \begin{tabular}{c}
+            \textbf{Almacenamiento}\\
+            \small blackbox\_process\_last\_will()\\
+            \small en receptores
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[arrow] (record) -- (trigger);
+    \draw[arrow] (trigger) -- (emit);
+    \draw[arrow] (emit) |- (store);
+
+    % Death
+    \node[font=\scriptsize, nanosaccent] at (8,-1.5) {Nodo muere};
+
+\end{tikzpicture}
+\caption{Flujo del sistema Black Box}
+\label{fig:blackbox-flow}
+\end{figure}
+
+\section{Almacenamiento de Testamentos}
+
+Cada nodo almacena hasta 8 testamentos recibidos:
+
+\begin{lstlisting}[caption={Almacenamiento de testamentos}]
+#define BLACKBOX_MAX_WILLS  8
+
+/* Estructura de almacenamiento */
+struct blackbox_storage {
+    struct {
+        uint32_t node_id;
+        uint8_t  death_reason;
+        uint8_t  uptime_hours;
+        uint16_t bad_mac_count;
+        uint16_t replay_count;
+        uint8_t  priority;      /* Para relay y reemplazo */
+        uint8_t  event_count;
+    } wills[BLACKBOX_MAX_WILLS];
+
+    uint8_t count;              /* Testamentos almacenados */
+};
+\end{lstlisting}
+
+\section{API de Black Box}
+
+\begin{lstlisting}[caption={Funciones principales de Black Box}]
+/* Inicializar sistema */
+void blackbox_init(void);
+
+/* Registrar evento de seguridad (durante operacion) */
+void blackbox_record_event(uint8_t event_type, uint16_t source_node);
+
+/* Emitir testamento antes de morir */
+void blackbox_emit_last_will(uint8_t death_reason);
+
+/* Procesar testamento recibido */
+void blackbox_process_last_will(struct nanos_pheromone* pkt);
+
+/* Consultar muerte de un nodo */
+int blackbox_query_death(uint32_t node_id,
+                         uint8_t *death_reason,
+                         uint16_t *bad_mac_count,
+                         uint8_t *uptime_hours);
+
+/* Obtener numero de testamentos almacenados */
+uint8_t blackbox_get_will_count(void);
+
+/* Propagar testamentos criticos a vecinos */
+void blackbox_relay_critical(void);
+
+/* Imprimir resumen forense (debug) */
+void blackbox_print_summary(void);
+\end{lstlisting}
+
+\section{Ejemplo de Investigación Forense}
+
+\begin{lstlisting}[caption={Consulta forense de nodo muerto}]
+void investigate_dead_node(uint32_t suspect_id) {
+    uint8_t death_reason;
+    uint16_t bad_mac;
+    uint8_t uptime;
+
+    if (blackbox_query_death(suspect_id, &death_reason,
+                             &bad_mac, &uptime) == 0) {
+        printf("Node 0x%08x death investigation:\n", suspect_id);
+        printf("  Uptime: %d hours\n", uptime);
+
+        switch (death_reason) {
+            case DEATH_ATTACK_DETECTED:
+                printf("  ALERT: Died under attack!\n");
+                printf("  Bad MACs received: %d\n", bad_mac);
+                break;
+            case DEATH_CORRUPTION:
+                printf("  Memory corruption detected\n");
+                break;
+            case DEATH_NATURAL:
+                printf("  Normal lifecycle end\n");
+                break;
+        }
+    } else {
+        printf("No forensic data for node 0x%08x\n", suspect_id);
+    }
+}
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Title
+    \node[font=\small\bfseries] at (6, 4) {Probabilidad de Supervivencia de Evidencia};
+
+    % Dying node
+    \node[draw, circle, fill=nanosaccent!50, minimum size=1.2cm] (dying) at (0, 1.5) {\tiny Dying};
+
+    % Recipients (k=3)
+    \node[draw, circle, fill=nanosgreen!40, minimum size=1cm] (r1) at (3, 3) {\tiny R1};
+    \node[draw, circle, fill=nanosgreen!40, minimum size=1cm] (r2) at (3, 1.5) {\tiny R2};
+    \node[draw, circle, fill=nanosgreen!40, minimum size=1cm] (r3) at (3, 0) {\tiny R3};
+
+    % Arrows with labels
+    \draw[->, thick] (dying) -- (r1);
+    \draw[->, thick] (dying) -- (r2);
+    \draw[->, thick] (dying) -- (r3);
+
+    % Probability annotations
+    \node[font=\tiny, right] at (3.6, 3) {$p_{comp} = 10\%$};
+    \node[font=\tiny, right] at (3.6, 1.5) {$p_{comp} = 10\%$};
+    \node[font=\tiny, right] at (3.6, 0) {$p_{comp} = 10\%$};
+
+    % Formula box
+    \node[draw, rounded corners, fill=nanosprimary!10, minimum width=5cm, minimum height=2.5cm, align=center]
+        at (9, 1.5) {
+        \begin{tabular}{c}
+            $P(\text{pérdida total}) = p^k = 0.1^3$\\[0.3cm]
+            $= 0.001 = 0.1\%$\\[0.3cm]
+            \textcolor{nanosgreen}{\textbf{$P(\text{sobrevive}) = 99.9\%$}}
+        \end{tabular}
+    };
+
+    % Bar chart comparison
+    \node[font=\tiny\bfseries] at (6, -1.5) {Comparación por número de receptores};
+
+    % k=1
+    \fill[nanosaccent!60] (3.5, -2) rectangle (4, -2.9);
+    \node[font=\tiny, below] at (3.75, -3) {k=1};
+    \node[font=\tiny] at (3.75, -2.45) {90\%};
+
+    % k=2
+    \fill[nanosprimary!60] (5, -2) rectangle (5.5, -2.09);
+    \node[font=\tiny, below] at (5.25, -3) {k=2};
+    \node[font=\tiny] at (5.25, -2.35) {99\%};
+
+    % k=3
+    \fill[nanosgreen!60] (6.5, -2) rectangle (7, -2.009);
+    \node[font=\tiny, below] at (6.75, -3) {k=3};
+    \node[font=\tiny] at (6.75, -2.35) {99.9\%};
+
+    % Axis
+    \draw[->] (3.2, -3) -- (3.2, -1.8);
+    \node[font=\tiny, rotate=90] at (2.9, -2.4) {P(pérdida)};
+\end{tikzpicture}
+\caption{Supervivencia de evidencia: con 3 receptores, la probabilidad de pérdida es solo 0.1\%}
+\label{fig:evidence-survival}
+\end{figure}
+
+\begin{infobox}[Supervivencia de Evidencia]
+Con 3 receptores de confianza y probabilidad de compromiso 10\% por nodo,
+la evidencia sobrevive con probabilidad $1 - 0.1^3 = 99.9\%$.
+``Los muertos hablan a través de los vivos.''
+\end{infobox}
 
 %===============================================================================
 % PART II: NERT Protocol
@@ -1680,6 +2579,51 @@ BLOOM\_SLOTS & 4 & Slots rotativos \\
 BLOOM\_WINDOW\_MS & 500 & Ventana por slot \\
 MAX\_CELL\_LIFETIME & 3600000 & Vida máxima del nodo (ms) \\
 HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
+\midrule
+\multicolumn{3}{l}{\textbf{Enrutamiento Hebbiano (v0.5)}} \\
+\midrule
+SYNAPSE\_WEIGHT\_MIN & 1 & Peso sináptico mínimo \\
+SYNAPSE\_WEIGHT\_MAX & 255 & Peso sináptico máximo \\
+SYNAPSE\_WEIGHT\_INITIAL & 128 & Peso inicial (neutral) \\
+SYNAPSE\_WEIGHT\_THRESHOLD & 32 & Umbral para ruta saludable \\
+SYNAPSE\_LTP\_INCREMENT & 15 & Recompensa por éxito (LTP) \\
+SYNAPSE\_LTD\_DECREMENT & 40 & Castigo por fallo (LTD) \\
+SYNAPSE\_STDP\_BONUS & 5 & Bonus por respuesta rápida \\
+SYNAPSE\_STDP\_WINDOW\_MS & 100 & Ventana STDP (ms) \\
+SYNAPSE\_DECAY\_INTERVAL\_MS & 5000 & Intervalo de decaimiento \\
+SYNAPSE\_DECAY\_AMOUNT & 1 & Decremento por intervalo \\
+\midrule
+\multicolumn{3}{l}{\textbf{Stigmergia (v0.5)}} \\
+\midrule
+STIGMERGIA\_DANGER & 0 & Tipo: zona de peligro \\
+STIGMERGIA\_QUEEN & 1 & Tipo: camino a reina \\
+STIGMERGIA\_RESOURCE & 2 & Tipo: marcador de recurso \\
+STIGMERGIA\_AVOID & 3 & Tipo: zona a evitar \\
+STIGMERGIA\_INTENSITY\_MAX & 15 & Intensidad máxima (4 bits) \\
+STIGMERGIA\_DECAY\_INTERVAL\_MS & 1000 & Decaimiento cada 1s \\
+STIGMERGIA\_DECAY\_AMOUNT & 1 & Resta 1 por intervalo \\
+STIGMERGIA\_PROPAGATE\_THRESHOLD & 6 & Min intensidad para propagar \\
+STIGMERGIA\_PROPAGATE\_DECAY & 3 & Decremento al propagar \\
+STIGMERGIA\_DANGER\_COST\_MULT & 8 & Multiplicador costo DANGER \\
+STIGMERGIA\_AVOID\_COST\_MULT & 4 & Multiplicador costo AVOID \\
+STIGMERGIA\_QUEEN\_COST\_BONUS & 2 & Bonus atracción QUEEN \\
+STIGMERGIA\_SIZE & 16 & Grid 16x16 (escala 2:1) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Black Box (v0.5)}} \\
+\midrule
+BLACKBOX\_MAX\_WILLS & 8 & Testamentos almacenados \\
+DEATH\_NATURAL & 0x00 & Muerte natural (timeout) \\
+DEATH\_HEAP\_EXHAUSTED & 0x01 & Sin memoria \\
+DEATH\_CORRUPTION & 0x02 & Corrupción detectada \\
+DEATH\_ATTACK\_DETECTED & 0x03 & Bajo ataque \\
+DEATH\_QUEEN\_ORDER & 0x04 & Orden de la reina \\
+DEATH\_ISOLATION & 0x05 & Sin contacto \\
+EVENT\_BAD\_MAC & 0x01 & MAC inválido \\
+EVENT\_REPLAY & 0x02 & Intento de replay \\
+EVENT\_RATE\_LIMIT & 0x03 & Rate limit excedido \\
+EVENT\_BLACKLIST & 0x04 & Nodo en blacklist \\
+EVENT\_JAMMING & 0x05 & Jamming detectado \\
+EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
 
 \caption{Constantes de configuración de NanOS/NERT}
 \label{tab:constants}
@@ -1690,6 +2634,10 @@ HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
 \begin{description}[style=nextline]
     \item[Apoptosis] Muerte celular programada. En NanOS, el proceso por el
         cual un nodo termina su ejecución de forma controlada.
+
+    \item[Black Box (v0.5)] Sistema de preservación de evidencia forense.
+        Los nodos emiten un ``testamento'' antes de morir que sobrevive en
+        vecinos de confianza.
 
     \item[Bloom Filter] Estructura de datos probabilística para pruebas de
         membresía con eficiencia de espacio.
@@ -1710,6 +2658,12 @@ HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
 
     \item[HMAC] Hash-based Message Authentication Code.
 
+    \item[LTD] Long-Term Depression. Debilitamiento de conexiones sinápticas
+        tras eventos negativos (timeouts, fallos de entrega).
+
+    \item[LTP] Long-Term Potentiation. Fortalecimiento de conexiones sinápticas
+        tras eventos positivos (ACKs exitosos).
+
     \item[Nodo Desechable] Nodo diseñado con vida útil limitada que
         regenera al morir.
 
@@ -1719,7 +2673,17 @@ HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
 
     \item[SACK] Selective Acknowledgment.
 
+    \item[STDP] Spike-Timing Dependent Plasticity. Mecanismo donde el tiempo
+        de respuesta afecta el aprendizaje (respuestas rápidas refuerzan más).
+
+    \item[Stigmergia (v0.5)] Coordinación indirecta a través de modificación
+        del ambiente. En NanOS, feromonas digitales que decaen con el tiempo
+        y modifican costos de movimiento. ``Las hormigas no memorizan mapas.''
+
     \item[Swarm] Conjunto de nodos comunicándose colectivamente.
+
+    \item[Synaptic Weight] Peso sináptico. Valor [1-255] que representa la
+        confiabilidad aprendida de una conexión con un vecino.
 \end{description}
 
 %-------------------------------------------------------------------------------
@@ -1731,9 +2695,10 @@ HEAP\_CRITICAL\_PCT & 90 & Umbral crítico de heap \\
 \chapter*{Sobre Este Documento}
 \addcontentsline{toc}{chapter}{Sobre Este Documento}
 
-Este manual técnico fue generado como parte del proyecto NanOS v0.3.
-Cubre la arquitectura del sistema operativo y el protocolo NERT diseñado
-específicamente para comunicación entre nodos desechables.
+Este manual técnico fue generado como parte del proyecto NanOS v0.5.
+Cubre la arquitectura del sistema operativo, el protocolo NERT diseñado
+específicamente para comunicación entre nodos desechables, y el sistema
+de enrutamiento Hebbiano inspirado en neurociencia.
 
 \vspace{1cm}
 

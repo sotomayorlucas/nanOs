@@ -9,6 +9,7 @@
  */
 
 #include "../include/nanos.h"
+#include "../include/nanos/gossip.h"  /* Hebbian routing (v0.5) */
 
 /* Use HAL for portable version, direct calls for x86 */
 #ifdef ARCH_X86
@@ -68,8 +69,9 @@ void neighbor_update(struct nanos_pheromone* pkt) {
 
     /* Update role counts if this is a new neighbor or role changed */
     if (entry->node_id == 0) {
-        /* New neighbor */
+        /* New neighbor - initialize Hebbian synaptic weight to neutral */
         g_state.neighbor_count++;
+        entry->synaptic_weight = 128;  /* SYNAPSE_WEIGHT_INITIAL */
     } else if (entry->role != role) {
         /* Role changed - decrement old, will increment new below */
         if (entry->role > 0 && entry->role < 8) {
@@ -420,6 +422,45 @@ void coronation_announce(void) {
 }
 
 /* ==========================================================================
+ * Neural Routing Cost (v0.5 Hebbian)
+ * "The brain chooses paths that WORK, not just paths that are short"
+ * ========================================================================== */
+
+/*
+ * Compute neural routing cost combining distance and synaptic weight
+ *
+ * Formula: Cost = (Hops * 10) + ((255 - synaptic_weight) / 8)
+ *
+ * Interpretation:
+ * - Lower cost = better route
+ * - Distance (hops) is the primary factor (scaled by 10)
+ * - Synaptic weight is secondary (0-31 penalty range)
+ *
+ * Examples:
+ * - Distance 1, weight 255 (perfect):   cost = 10 + 0  = 10
+ * - Distance 1, weight 128 (neutral):   cost = 10 + 15 = 25
+ * - Distance 1, weight 1   (dead):      cost = 10 + 31 = 41
+ * - Distance 2, weight 255 (perfect):   cost = 20 + 0  = 20
+ *
+ * Key insight: A reliable 2-hop path (cost 20) beats an unreliable
+ * 1-hop path (cost 41). The network learns to route around bad nodes.
+ */
+static uint16_t compute_route_cost(uint8_t distance, uint16_t node_id) {
+    uint8_t weight = nert_synapse_get_weight(node_id);
+
+    /* If neighbor not found, use neutral weight */
+    if (weight == 0) {
+        weight = SYNAPSE_WEIGHT_INITIAL;  /* 128 = neutral */
+    }
+
+    /* Cost = (hops * 10) + reliability_penalty */
+    uint16_t cost = (uint16_t)(distance * 10);
+    cost += (255 - weight) / 8;
+
+    return cost;
+}
+
+/* ==========================================================================
  * Gradient Routing
  * ========================================================================== */
 
@@ -442,16 +483,39 @@ void gradient_update(struct nanos_pheromone* pkt) {
         return;
     }
 
-    /* If sender has shorter path to queen, update our gradient */
-    if (pkt->distance < GRADIENT_INFINITY &&
-        pkt->distance + 1 < g_state.distance_to_queen) {
+    /*
+     * Neural Routing (v0.5): Use composite cost instead of just distance
+     *
+     * The brain doesn't just pick the shortest path - it picks the path
+     * that has WORKED before. A slightly longer but reliable path is
+     * better than a short but flaky one.
+     */
+    if (pkt->distance < GRADIENT_INFINITY) {
+        uint8_t candidate_distance = pkt->distance + 1;
 
-        g_state.distance_to_queen = pkt->distance + 1;
-        g_state.gradient_via = pkt->node_id;
+        /* Compute cost for this candidate gateway */
+        uint16_t candidate_cost = compute_route_cost(candidate_distance,
+                                                     (uint16_t)pkt->node_id);
 
-        /* Also update queen tracking if we learned about one */
-        if (g_state.last_queen_seen == 0) {
-            g_state.last_queen_seen = TICKS();
+        /* Compute cost for current best gateway */
+        uint16_t current_cost;
+        if (g_state.gradient_via == 0) {
+            /* No current gateway - accept any valid candidate */
+            current_cost = 0xFFFF;
+        } else {
+            current_cost = compute_route_cost(g_state.distance_to_queen,
+                                              (uint16_t)g_state.gradient_via);
+        }
+
+        /* Switch to new gateway if it offers better (lower) cost */
+        if (candidate_cost < current_cost) {
+            g_state.distance_to_queen = candidate_distance;
+            g_state.gradient_via = pkt->node_id;
+
+            /* Also update queen tracking if we learned about one */
+            if (g_state.last_queen_seen == 0) {
+                g_state.last_queen_seen = TICKS();
+            }
         }
     }
 
@@ -492,13 +556,26 @@ void gradient_propagate(void) {
 
 /*
  * Find next hop for routing to destination
+ *
+ * v0.5: Now considers synaptic health when selecting routes.
+ * Unhealthy routes are skipped in favor of gradient routing.
  */
 uint32_t route_next_hop(uint32_t dest_id) {
     /* Check route cache first */
     for (int i = 0; i < ROUTE_CACHE_SIZE; i++) {
         if (g_state.routes[i].dest_id == dest_id &&
             g_state.routes[i].valid) {
-            return g_state.routes[i].via_id;
+
+            /*
+             * v0.5 Hebbian check: Only use cached route if the
+             * via node has healthy synaptic weight. Otherwise,
+             * skip to gradient routing which uses neural selection.
+             */
+            uint16_t via = (uint16_t)g_state.routes[i].via_id;
+            if (nert_synapse_is_healthy(via)) {
+                return g_state.routes[i].via_id;
+            }
+            /* Unhealthy via node - skip this cached route */
         }
     }
 
@@ -507,7 +584,16 @@ uint32_t route_next_hop(uint32_t dest_id) {
         return g_state.gradient_via;
     }
 
-    /* No route - return 0 for broadcast */
+    /*
+     * v0.5: For unknown destinations, try best neighbor instead of broadcast
+     * This uses Hebbian selection to pick the most reliable relay
+     */
+    uint32_t best = nert_synapse_select_best(g_state.node_id);
+    if (best != 0) {
+        return best;
+    }
+
+    /* No healthy route - return 0 for broadcast */
     return 0;
 }
 

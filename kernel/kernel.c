@@ -931,6 +931,9 @@ static void sensor_aggregate(void) {
 /* Terrain module moved to kernel/tactical/terrain.c */
 #include "../include/nanos/terrain.h"
 
+/* v0.5: Distributed Black Box - forensic evidence preservation */
+#include "../include/nanos/blackbox.h"
+
 /* Global Compute module moved to kernel/workloads/global_compute.c */
 #include "../include/nanos/global_compute.h"
 
@@ -1094,15 +1097,28 @@ void cell_apoptosis(void) {
     vga_puts("\n!!! APOPTOSIS TRIGGERED !!!\n");
     vga_puts("    Reason: ");
 
+    /* v0.5: Determine death reason for Black Box */
+    uint8_t death_reason = DEATH_UNKNOWN;
+
     if (heap_usage_percent() >= HEAP_CRITICAL_PCT) {
         vga_puts("Memory exhaustion (");
         vga_put_dec(heap_usage_percent());
         vga_puts("%)\n");
+        death_reason = DEATH_HEAP_EXHAUSTED;
     } else if (ticks - g_state.boot_time > MAX_CELL_LIFETIME) {
         vga_puts("Maximum lifetime reached\n");
+        death_reason = DEATH_NATURAL;
+    } else if (g_state.neighbor_count == 0 &&
+               ticks - g_state.boot_time > 60000) {
+        vga_puts("Isolation\n");
+        death_reason = DEATH_ISOLATION;
     } else {
         vga_puts("Unknown\n");
     }
+
+    /* v0.5: Emit Last Will to trusted neighbors before dying
+     * "The dead speak through the living" */
+    blackbox_emit_last_will(death_reason);
 
     /* Emit farewell pheromone */
     struct nanos_pheromone pkt;
@@ -1487,6 +1503,16 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             terrain_process_strategy(pkt);
             break;
 
+        /* v0.5 Stigmergia: Digital pheromone broadcast */
+        case PHEROMONE_STIGMERGIA:
+            terrain_process_stigmergia(pkt);
+            break;
+
+        /* v0.5 Black Box: Dying node's testament */
+        case PHEROMONE_LAST_WILL:
+            blackbox_process_last_will(pkt);
+            break;
+
         default:
             break;
     }
@@ -1760,6 +1786,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
 
     /* Initialize terrain exploration */
     terrain_init();
+
+    /* v0.5: Initialize distributed black box (forensics) */
+    blackbox_init();
 
     vga_puts("\n[*] Cell alive. Features:\n");
     vga_puts("    - Quorum sensing\n");

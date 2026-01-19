@@ -1,0 +1,54 @@
+\babel@toc {spanish}{}\relax 
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {1.1}{\ignorespaces Analogía biológica de NanOS}}{13}{figure.caption.4}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Arquitectura de capas de NanOS}}{15}{figure.caption.6}%
+\contentsline {figure}{\numberline {2.2}{\ignorespaces Ciclo de vida de un nodo NanOS}}{16}{figure.caption.7}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Sistema de roles en el enjambre}}{17}{figure.caption.8}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Fases del algoritmo de elección}}{18}{figure.caption.10}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Estructura del paquete pheromone estándar}}{19}{figure.caption.12}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Proceso de generación de HMAC}}{20}{figure.caption.13}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Visualización del Bloom filter con slots rotativos}}{21}{figure.caption.14}%
+\contentsline {figure}{\numberline {5.2}{\ignorespaces Decaimiento de probabilidad en el protocolo gossip}}{22}{figure.caption.15}%
+\contentsline {figure}{\numberline {5.3}{\ignorespaces Enrutamiento por gradiente hacia la reina}}{22}{figure.caption.16}%
+\contentsline {figure}{\numberline {5.4}{\ignorespaces Reglas de aprendizaje Hebbiano}}{23}{figure.caption.17}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Analogía biológica de Stigmergia}}{25}{figure.caption.19}%
+\contentsline {figure}{\numberline {6.2}{\ignorespaces Tipos de feromonas y su efecto en el costo de movimiento}}{26}{figure.caption.21}%
+\contentsline {figure}{\numberline {6.3}{\ignorespaces Nibble packing: 4 tipos de feromona en 2 bytes por celda}}{26}{figure.caption.22}%
+\contentsline {figure}{\numberline {6.4}{\ignorespaces Decaimiento de feromonas: -1 cada segundo}}{27}{figure.caption.23}%
+\contentsline {figure}{\numberline {6.5}{\ignorespaces Efecto de feromonas en pathfinding: el enjambre rodea zonas peligrosas}}{27}{figure.caption.25}%
+\contentsline {figure}{\numberline {6.6}{\ignorespaces Propagación de feromona DANGER}}{28}{figure.caption.26}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces Escenario de ataque sin Black Box: la evidencia se pierde al morir el nodo}}{29}{figure.caption.27}%
+\contentsline {figure}{\numberline {7.2}{\ignorespaces Comparación: sin Black Box la evidencia se pierde, con Black Box sobrevive}}{30}{figure.caption.28}%
+\contentsline {figure}{\numberline {7.3}{\ignorespaces Transmisión del Último Aliento a vecinos de confianza}}{30}{figure.caption.29}%
+\contentsline {figure}{\numberline {7.4}{\ignorespaces Códigos de muerte y eventos de seguridad registrados en el testamento}}{31}{figure.caption.30}%
+\contentsline {figure}{\numberline {7.5}{\ignorespaces Flujo del sistema Black Box}}{31}{figure.caption.31}%
+\contentsline {figure}{\numberline {7.6}{\ignorespaces Supervivencia de evidencia: con 3 receptores, la probabilidad de pérdida es solo 0.1\%}}{33}{figure.caption.32}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {8.1}{\ignorespaces Clases de confiabilidad de NERT}}{37}{figure.caption.34}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {9.1}{\ignorespaces Header NERT estándar de 20 bytes}}{39}{figure.caption.35}%
+\contentsline {figure}{\numberline {9.2}{\ignorespaces Estructura completa del paquete NERT}}{40}{figure.caption.37}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {10.1}{\ignorespaces Proceso de derivación de clave de sesión}}{41}{figure.caption.39}%
+\contentsline {figure}{\numberline {10.2}{\ignorespaces Mecanismo de ventana de gracia para rotación de claves}}{42}{figure.caption.40}%
+\contentsline {figure}{\numberline {10.3}{\ignorespaces Estructura del nonce de 96 bits}}{42}{figure.caption.41}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {11.1}{\ignorespaces Máquina de estados de conexión NERT (simplificada)}}{43}{figure.caption.42}%
+\contentsline {figure}{\numberline {11.2}{\ignorespaces Handshake de dos vías de NERT}}{43}{figure.caption.43}%
+\contentsline {figure}{\numberline {11.3}{\ignorespaces Ejemplo de Selective ACK}}{44}{figure.caption.44}%
+\contentsline {figure}{\numberline {11.4}{\ignorespaces Crecimiento del RTO con backoff exponencial}}{44}{figure.caption.45}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {12.1}{\ignorespaces Esquema FEC con paridad XOR}}{45}{figure.caption.46}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {13.1}{\ignorespaces Transmisión multi-path con rutas diversas}}{47}{figure.caption.48}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }

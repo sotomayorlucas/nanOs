@@ -126,6 +126,13 @@ echo ""
 echo -e "${YELLOW}Waiting 3 seconds for processing...${NC}"
 sleep 3
 
+# Stop nodes gracefully to get final statistics
+echo -e "${YELLOW}Stopping nodes to collect statistics...${NC}"
+for pid in "${PIDS[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+done
+sleep 2
+
 # Collect results
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
@@ -142,20 +149,27 @@ for i in $(seq 1 $NUM_NODES); do
 
     echo -e "${GREEN}Node 0x${NODE_ID}:${NC}"
 
-    # Count security events
-    BAD_MAC=$(grep -c "BAD_MAC" "$LOG_FILE" 2>/dev/null || echo 0)
-    REPLAY=$(grep -c "REPLAY_BLOCKED" "$LOG_FILE" 2>/dev/null || echo 0)
-    INVALID=$(grep -c "INVALID_PAYLOAD" "$LOG_FILE" 2>/dev/null || echo 0)
-
-    echo "  Bad MAC attempts: $BAD_MAC"
-    echo "  Replay attacks blocked: $REPLAY"
-    echo "  Invalid payloads rejected: $INVALID"
-
-    # Show final statistics if available
+    # Extract statistics from final summary (using awk for portability)
     if grep -q "Final Statistics" "$LOG_FILE"; then
-        echo ""
-        echo "  Final Statistics:"
-        grep -A 5 "Final Statistics" "$LOG_FILE" | tail -4 | sed 's/^/    /'
+        # Extract security stats
+        SECURITY_LINE=$(grep "Security:" "$LOG_FILE" 2>/dev/null)
+        if [ -n "$SECURITY_LINE" ]; then
+            BAD_MAC=$(echo "$SECURITY_LINE" | awk -F'[:,]' '{for(i=1;i<=NF;i++) if($i ~ /bad MACs/) {gsub(/[^0-9]/,"",$i); print $i}}')
+            REPLAY=$(echo "$SECURITY_LINE" | awk -F'[:,]' '{for(i=1;i<=NF;i++) if($i ~ /replays/) {gsub(/[^0-9]/,"",$i); print $i}}')
+            echo "  Bad MAC attempts blocked: ${BAD_MAC:-0}"
+            echo "  Replay attacks blocked: ${REPLAY:-0}"
+        fi
+
+        # Extract RX stats
+        RX_LINE=$(grep "RX:" "$LOG_FILE" 2>/dev/null)
+        if [ -n "$RX_LINE" ]; then
+            RX_PKTS=$(echo "$RX_LINE" | awk '{for(i=1;i<=NF;i++) if($(i+1) ~ /packets/) print $i}')
+            DUPS=$(echo "$RX_LINE" | awk '{for(i=1;i<=NF;i++) if($(i+1) ~ /duplicates/) print $i}')
+            echo "  Packets received: ${RX_PKTS:-0}"
+            echo "  Duplicates detected: ${DUPS:-0}"
+        fi
+    else
+        echo "  (No statistics available)"
     fi
 
     echo ""

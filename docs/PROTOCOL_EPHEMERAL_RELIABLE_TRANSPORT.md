@@ -1,4 +1,4 @@
-# NanOS Ephemeral Reliable Transport (NERT) Protocol v1.0
+# NanOS Ephemeral Reliable Transport (NERT) Protocol v1.2
 
 ## Overview
 
@@ -517,11 +517,386 @@ int nert_is_duplicate(uint16_t sender_id, uint16_t seq_num) {
 
 ---
 
-## 7. Handshake de Conexión Reliable
+## 7. Enrutamiento Hebbiano (v0.5)
 
-### 7.1 Two-Way Handshake (simplificado)
+### 7.1 Inspiración Neurológica
 
-A diferencia del 3-way handshake de TCP, usamos 2-way para conexiones efímeras:
+> "Las neuronas que se disparan juntas, se conectan juntas" — Donald Hebb
+
+NanOS v0.5 introduce **enrutamiento Hebbiano**, un sistema de aprendizaje inspirado en la plasticidad sináptica del cerebro. Cada conexión con un vecino tiene un "peso sináptico" que representa la confiabilidad aprendida de esa ruta.
+
+### 7.2 Peso Sináptico
+
+```c
+/* Agregado a neighbor_entry */
+struct neighbor_entry {
+    uint32_t node_id;
+    uint32_t last_seen;
+    uint8_t  role;
+    uint8_t  distance;
+    uint16_t packets;
+    uint8_t  synaptic_weight;  /* v0.5: 1-255, inicial: 128 */
+};
+```
+
+| Constante | Valor | Descripción |
+|-----------|-------|-------------|
+| SYNAPSE_WEIGHT_MIN | 1 | Peso mínimo (conexión casi muerta) |
+| SYNAPSE_WEIGHT_MAX | 255 | Peso máximo (conexión perfecta) |
+| SYNAPSE_WEIGHT_INITIAL | 128 | Peso inicial neutral |
+| SYNAPSE_WEIGHT_THRESHOLD | 32 | Umbral para ruta saludable |
+
+### 7.3 Reglas de Aprendizaje
+
+#### Long-Term Potentiation (LTP) - Recompensa
+
+Cuando se recibe un ACK exitoso:
+```c
+weight = min(255, weight + 15);
+```
+
+#### Long-Term Depression (LTD) - Castigo
+
+Cuando hay timeout o reintentos agotados:
+```c
+weight = max(1, weight - 40);
+```
+
+**Asimetría intencional**: El castigo es ~3x más severo que la recompensa para que el enjambre aprenda rápidamente a evitar nodos problemáticos.
+
+#### Spike-Timing Dependent Plasticity (STDP)
+
+Bonus adicional para respuestas rápidas (<100ms):
+```c
+if (response_ms < SYNAPSE_STDP_WINDOW_MS) {
+    weight = min(255, weight + 5);
+}
+```
+
+### 7.4 Fórmula de Costo Neural
+
+El costo de ruta combina distancia física y confiabilidad aprendida:
+
+```
+Costo(j) = 10 × distancia_j + (255 - peso_j) / 8
+```
+
+| Distancia | Peso | Costo | Interpretación |
+|-----------|------|-------|----------------|
+| 1 hop | 255 (perfecto) | 10 + 0 = 10 | Mejor caso |
+| 1 hop | 128 (neutral) | 10 + 15 = 25 | Conexión nueva |
+| 1 hop | 1 (muerto) | 10 + 31 = 41 | Nodo problemático |
+| 2 hops | 255 (perfecto) | 20 + 0 = 20 | Ruta alternativa viable |
+
+**Insight clave**: Una ruta de 2 hops confiable (costo=20) es MEJOR que una ruta de 1 hop poco confiable (costo=41). El enjambre aprende a rodear nodos defectuosos.
+
+### 7.5 Decaimiento Natural
+
+Para evitar pesos permanentemente altos y permitir adaptación:
+
+```c
+/* Cada 5 segundos */
+void nert_synapse_decay(void) {
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE; i++) {
+        if (neighbors[i].synaptic_weight > SYNAPSE_WEIGHT_INITIAL) {
+            neighbors[i].synaptic_weight -= SYNAPSE_DECAY_AMOUNT;
+        }
+    }
+}
+```
+
+### 7.6 Integración con Multi-Path
+
+El enrutamiento multi-path (sección 6) ahora usa pesos sinápticos en la selección:
+
+```c
+int nert_select_paths(uint16_t dest_id, uint16_t paths[NERT_MAX_PATHS]) {
+    for (int p = 0; p < NERT_MAX_PATHS; p++) {
+        /* Score ahora incluye peso sináptico */
+        uint8_t score = n->distance;
+        score += (255 - n->synaptic_weight) / 8;  /* v0.5: factor de confiabilidad */
+
+        if (score < best_score) {
+            best_score = score;
+            best = n;
+        }
+    }
+}
+```
+
+---
+
+## 8. Stigmergia: Feromonas Digitales (v0.5)
+
+### 8.1 Concepto
+
+Las hormigas no memorizan mapas; dejan **químicos que se evaporan**. Este mecanismo de coordinación indirecta se llama **stigmergia**. NanOS v0.5 implementa esto digitalmente.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Analogía Stigmergia                          │
+├─────────────────────────────────────────────────────────────────┤
+│  Hormiga real:          │  NanOS Digital:                       │
+│  - Feromona química     │  - Feromona digital (4 bits)          │
+│  - Se evapora con tiempo│  - Decae 1/segundo                    │
+│  - Atrae o repele       │  - Modifica costo de movimiento       │
+│  - Sin memoria central  │  - Sin coordinación central           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Tipos de Feromonas
+
+| Tipo | Código | Efecto en Costo | Uso |
+|------|--------|-----------------|-----|
+| DANGER | 0 | +8 × intensidad | Jamming, ataques, nodos maliciosos |
+| QUEEN | 1 | -2 × intensidad | Camino hacia la reina (atracción) |
+| RESOURCE | 2 | Neutral | Marcador de objetivos |
+| AVOID | 3 | +4 × intensidad | Zonas subóptimas |
+
+### 8.3 Estructura de Datos
+
+```c
+/* Almacenamiento eficiente: 4 tipos en 2 bytes por celda */
+#define STIGMERGIA_SIZE     16   /* Grid 16x16 cubriendo terreno 32x32 */
+
+struct {
+    uint8_t data[2];  /* [DANGER:4|QUEEN:4], [RESOURCE:4|AVOID:4] */
+} pheromones[STIGMERGIA_SIZE][STIGMERGIA_SIZE];
+
+/* Total: 16 × 16 × 2 = 512 bytes */
+```
+
+### 8.4 Decaimiento Temporal
+
+```c
+#define STIGMERGIA_DECAY_INTERVAL_MS    1000    /* Cada 1 segundo */
+#define STIGMERGIA_DECAY_AMOUNT         1       /* -1 intensidad */
+#define STIGMERGIA_INTENSITY_MAX        15      /* Máximo (4 bits) */
+
+void stigmergia_decay(void) {
+    /* Cada segundo: todas las feromonas -1, mínimo 0 */
+    for (int y = 0; y < STIGMERGIA_SIZE; y++) {
+        for (int x = 0; x < STIGMERGIA_SIZE; x++) {
+            for (int type = 0; type < 4; type++) {
+                uint8_t intensity = stigmergia_get(x, y, type);
+                if (intensity > 0) {
+                    stigmergia_set(x, y, type, intensity - 1);
+                }
+            }
+        }
+    }
+}
+```
+
+### 8.5 Modificación de Costo de Movimiento
+
+```
+Costo_total = Costo_base + 8×DANGER + 4×AVOID - 2×QUEEN
+```
+
+| Situación | Feromonas | Modificador | Costo Final |
+|-----------|-----------|-------------|-------------|
+| Celda normal | Ninguna | 0 | 10 |
+| Zona peligrosa | DANGER=15 | +120 | 130 |
+| Cerca de reina | QUEEN=10 | -20 | -10 (atracción) |
+| Zona subóptima | AVOID=8 | +32 | 42 |
+
+### 8.6 Propagación de Feromonas
+
+Feromonas de alta intensidad se propagan a celdas vecinas con decremento:
+
+```c
+#define STIGMERGIA_PROPAGATE_THRESHOLD  6   /* Min para propagar */
+#define STIGMERGIA_PROPAGATE_DECAY      3   /* -3 al propagar */
+
+void stigmergia_propagate(void) {
+    for (cada celda con intensidad >= threshold) {
+        /* Propagar a vecinos con intensidad - 3 */
+        propagar_a_vecinos(x, y, type, intensidad - STIGMERGIA_PROPAGATE_DECAY);
+    }
+}
+```
+
+### 8.7 Paquete de Feromona (PHEROMONE_STIGMERGIA = 0x88)
+
+```c
+struct stigmergia_payload {
+    uint8_t  terrain_x;     /* Coordenada X (terreno) */
+    uint8_t  terrain_y;     /* Coordenada Y (terreno) */
+    uint8_t  type;          /* STIGMERGIA_* tipo */
+    uint8_t  intensity;     /* 0-15 intensidad */
+};
+```
+
+---
+
+## 9. Black Box Distribuida: "El Último Aliento" (v0.5)
+
+### 9.1 Problema
+
+Cuando un nodo es comprometido y terminado, su evidencia forense se pierde. Un atacante inteligente podría comprometer un nodo, extraer información, y forzar su "suicidio" para eliminar rastros.
+
+### 9.2 Solución
+
+Antes de morir, cada nodo transmite un **testamento** (Last Will) a vecinos de confianza seleccionados por peso Hebbiano. La evidencia sobrevive en el enjambre.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Flujo Black Box                              │
+├─────────────────────────────────────────────────────────────────┤
+│  Operación Normal:                                              │
+│    blackbox_record_event() → Almacena eventos de seguridad      │
+│                                                                 │
+│  Trigger de Muerte:                                             │
+│    cell_apoptosis() → blackbox_emit_last_will()                 │
+│                       → Envía a vecinos con mayor peso Hebbiano │
+│                                                                 │
+│  En Receptores:                                                 │
+│    blackbox_process_last_will() → Almacena testamento           │
+│                                                                 │
+│  Consulta Forense:                                              │
+│    blackbox_query_death(node_id) → Retorna evidencia            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 Razones de Muerte
+
+```c
+#define DEATH_NATURAL           0x00  /* Vejez/timeout normal */
+#define DEATH_HEAP_EXHAUSTED    0x01  /* Sin memoria */
+#define DEATH_CORRUPTION        0x02  /* Corrupción detectada */
+#define DEATH_ATTACK_DETECTED   0x03  /* Ataque en progreso */
+#define DEATH_QUEEN_ORDER       0x04  /* Orden de la reina */
+#define DEATH_ISOLATION         0x05  /* Sin contacto con enjambre */
+```
+
+### 9.4 Tipos de Eventos de Seguridad
+
+```c
+#define EVENT_BAD_MAC           0x01  /* MAC inválido recibido */
+#define EVENT_REPLAY            0x02  /* Intento de replay */
+#define EVENT_RATE_LIMIT        0x03  /* Rate limit excedido */
+#define EVENT_BLACKLIST         0x04  /* Nodo en blacklist */
+#define EVENT_JAMMING           0x05  /* Jamming detectado */
+#define EVENT_CORRUPTION        0x06  /* Corrupción de memoria */
+```
+
+### 9.5 Contenido del Testamento
+
+```c
+struct last_will_testament {
+    uint32_t node_id;           /* ID del nodo que muere */
+    uint8_t  death_reason;      /* DEATH_* código */
+    uint8_t  uptime_hours;      /* Horas de vida */
+    uint16_t bad_mac_count;     /* MACs inválidos recibidos */
+    uint16_t replay_count;      /* Intentos de replay */
+    uint16_t rate_limit_hits;   /* Veces rate limited */
+
+    /* Últimos 8 eventos de seguridad */
+    struct {
+        uint8_t  type;          /* EVENT_* tipo */
+        uint16_t source_node;   /* Nodo relacionado */
+        uint32_t timestamp;     /* Cuando ocurrió */
+    } events[8];
+};
+```
+
+### 9.6 Selección de Receptores (Hebbiano)
+
+El testamento se envía a los 3 vecinos con mayor peso sináptico:
+
+```c
+void blackbox_emit_last_will(uint8_t death_reason) {
+    uint32_t recipients[3];
+    uint32_t exclude_list[3] = {0};
+
+    /* Seleccionar 3 vecinos más confiables */
+    for (int i = 0; i < 3; i++) {
+        recipients[i] = find_trusted_recipient(exclude_list);
+        exclude_list[i] = recipients[i];
+
+        if (recipients[i] != 0) {
+            /* Enviar testamento */
+            nert_send_reliable(recipients[i], PHEROMONE_LAST_WILL,
+                              &testament, sizeof(testament));
+        }
+    }
+}
+```
+
+### 9.7 Paquete de Testamento (PHEROMONE_LAST_WILL = 0x89)
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ NERT Header (20 bytes) │ Last Will Payload │ Auth Tag (8 bytes)│
+├────────────────────────┼───────────────────┼───────────────────┤
+│ type=0x89, RELIABLE    │ node_id, reason,  │ Poly1305 MAC      │
+│ class, encrypted       │ stats, events[8]  │                   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 9.8 Almacenamiento de Testamentos
+
+```c
+#define BLACKBOX_MAX_WILLS  8   /* Testamentos almacenados por nodo */
+
+struct blackbox_storage {
+    struct stored_will {
+        uint32_t node_id;
+        uint8_t  death_reason;
+        uint8_t  uptime_hours;
+        uint16_t bad_mac_count;
+        uint8_t  priority;      /* Para relay y reemplazo */
+        uint8_t  valid;
+    } wills[BLACKBOX_MAX_WILLS];
+
+    uint8_t count;
+};
+```
+
+### 9.9 API de Black Box
+
+```c
+/* Inicializar sistema */
+void blackbox_init(void);
+
+/* Registrar evento de seguridad (durante operación normal) */
+void blackbox_record_event(uint8_t event_type, uint16_t source_node);
+
+/* Emitir testamento antes de morir */
+void blackbox_emit_last_will(uint8_t death_reason);
+
+/* Procesar testamento recibido */
+void blackbox_process_last_will(struct nanos_pheromone* pkt);
+
+/* Consultar muerte de un nodo específico */
+int blackbox_query_death(uint32_t node_id,
+                         uint8_t *death_reason,
+                         uint16_t *bad_mac_count,
+                         uint8_t *uptime_hours);
+
+/* Imprimir resumen forense (debug) */
+void blackbox_print_summary(void);
+```
+
+### 9.10 Supervivencia de Evidencia
+
+Con 3 receptores de confianza y probabilidad de compromiso 10% por nodo:
+
+```
+P(evidencia perdida) = 0.1³ = 0.001 = 0.1%
+P(evidencia sobrevive) = 1 - 0.001 = 99.9%
+```
+
+> "Los muertos hablan a través de los vivos."
+
+---
+
+## 10. Handshake de Conexión Reliable
+
+### 10.1 Two-Way Handshake (simplificado)
+
+A diferencia del 3-way handshake de TCP, usamos 2-way para conexiones efímeras (para más detalles sobre selección de rutas ver sección 7.6):
 
 ```
     Nodo A                         Nodo B
@@ -535,7 +910,7 @@ A diferencia del 3-way handshake de TCP, usamos 2-way para conexiones efímeras:
       ... conexión establecida ...
 ```
 
-### 7.2 Código de Handshake
+### 10.2 Código de Handshake
 
 ```c
 int nert_connect(uint16_t peer_id) {
@@ -584,9 +959,9 @@ void nert_handle_syn(struct nert_packet *pkt) {
 
 ---
 
-## 8. API de Usuario
+## 11. API de Usuario
 
-### 8.1 Funciones Principales
+### 11.1 Funciones Principales
 
 ```c
 /*
@@ -644,7 +1019,7 @@ typedef void (*nert_receive_callback)(uint16_t sender_id,
 void nert_set_receive_callback(nert_receive_callback cb);
 ```
 
-### 8.2 Ejemplo de Uso
+### 11.2 Ejemplo de Uso
 
 ```c
 /* En kernel_main() */
@@ -693,7 +1068,7 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 
 ---
 
-## 9. Comparación con Protocolos Existentes
+## 12. Comparación con Protocolos Existentes
 
 | Característica | TCP | UDP | QUIC | **NERT** |
 |---------------|-----|-----|------|----------|
@@ -709,9 +1084,9 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 
 ---
 
-## 10. Consideraciones de Seguridad
+## 13. Consideraciones de Seguridad
 
-### 10.1 Modelo de Amenazas
+### 13.1 Modelo de Amenazas
 
 | Amenaza | Mitigación |
 |---------|------------|
@@ -719,10 +1094,11 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 | Replay attacks | Nonce único (node_id + counter + timestamp) |
 | Tampering | Poly1305 MAC sobre header + payload |
 | Impersonation | Clave pre-compartida del enjambre |
-| DoS flooding | Bloom filter + gossip decay existentes |
+| DoS flooding | Bloom filter + gossip decay + rate limiting (v0.5) |
+| Sybil/Eclipse attacks | Reputación Hebbiana: nodos maliciosos penalizados (v0.5) |
 | Man-in-the-middle | Requiere conocer SWARM_MASTER_KEY |
 
-### 10.2 Rotación de Claves con Ventana de Gracia
+### 13.2 Rotación de Claves con Ventana de Gracia
 
 **Problema**: Sin sincronización de tiempo, nodos con relojes ligeramente desincronizados
 podrían rechazar paquetes válidos justo en el cambio de época.
@@ -786,7 +1162,7 @@ uint8_t get_valid_key_mask(void) {
 - Sin sincronización de tiempo requerida
 - Overhead mínimo: 64 bytes extra de RAM para claves adicionales
 
-### 10.3 Protección Anti-Replay
+### 13.3 Protección Anti-Replay
 
 ```c
 /* Ventana anti-replay de 64 paquetes */
@@ -827,9 +1203,9 @@ int nert_check_replay(struct replay_protection *rp, uint16_t seq) {
 
 ---
 
-## 11. Métricas y Debugging
+## 14. Métricas y Debugging
 
-### 11.1 Contadores de Estadísticas
+### 14.1 Contadores de Estadísticas
 
 ```c
 struct nert_stats {
@@ -860,7 +1236,7 @@ struct nert_stats {
 extern struct nert_stats nert_stats;
 ```
 
-### 11.2 Debug Output
+### 14.2 Debug Output
 
 ```c
 #ifdef NERT_DEBUG
@@ -880,9 +1256,9 @@ void nert_debug_packet(const char *prefix, struct nert_packet *pkt) {
 
 ---
 
-## 12. Implementación por Plataforma
+## 15. Implementación por Plataforma
 
-### 12.1 x86 (QEMU e1000)
+### 15.1 x86 (QEMU e1000)
 
 ```c
 /* Usa infraestructura existente */
@@ -897,7 +1273,7 @@ int nert_hal_send(const void *data, uint16_t len) {
 }
 ```
 
-### 12.2 ARM Cortex-M3 (Stellaris)
+### 15.2 ARM Cortex-M3 (Stellaris)
 
 ```c
 /* Formato compacto para MCU */
@@ -915,7 +1291,7 @@ struct nert_header_compact {
 /* + 4 bytes auth tag = 16 bytes overhead total */
 ```
 
-### 12.3 ESP32
+### 15.3 ESP32
 
 ```c
 /* WiFi broadcast o ESP-NOW */
@@ -930,16 +1306,16 @@ int nert_hal_send(const void *data, uint16_t len) {
 
 ---
 
-## 13. Migración desde Protocolo Actual
+## 16. Migración desde Protocolo Actual
 
-### 13.1 Compatibilidad
+### 16.1 Compatibilidad
 
 NERT es compatible con el protocolo pheromone existente:
 - Mismo puerto multicast (230.0.0.1:1234)
 - Identificable por magic byte diferente (0x4E vs 0x4E414E4F)
 - Fallback a protocolo legacy si NERT no disponible
 
-### 13.2 Detección de Versión
+### 16.2 Detección de Versión
 
 ```c
 int nert_detect_protocol(const uint8_t *data, uint16_t len) {
@@ -955,9 +1331,9 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 
 ---
 
-## 14. Resumen de Recursos
+## 17. Resumen de Recursos
 
-### 14.1 Uso de RAM
+### 17.1 Uso de RAM
 
 | Componente | Tamaño | Notas |
 |------------|--------|-------|
@@ -970,7 +1346,7 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 | **Total** | **~1.8KB** | Sin FEC buffers |
 | + FEC Buffers | +768B | Solo para CRITICAL |
 
-### 14.2 Uso de CPU
+### 17.2 Uso de CPU
 
 | Operación | Ciclos (~ARM Cortex-M3) |
 |-----------|-------------------------|
@@ -1062,7 +1438,12 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 
 ---
 
-**Versión**: 1.0
+**Versión**: 1.2 (Stigmergia + Black Box)
 **Autor**: Claude Code / NanOS Team
 **Fecha**: 2026-01-18
 **Licencia**: MIT
+
+### Changelog
+- **v1.2**: Agregadas secciones 8 (Stigmergia: Feromonas Digitales) y 9 (Black Box Distribuida: "El Último Aliento")
+- **v1.1**: Agregado sección 7 (Enrutamiento Hebbiano), actualizado secciones de seguridad con protección contra ataques Sybil/Eclipse
+- **v1.0**: Versión inicial del protocolo NERT

@@ -1,0 +1,75 @@
+\relax 
+\providecommand \babel@aux [2]{\global \let \babel@toc \@gobbletwo }
+\@nameuse{bbl@beforestart}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{bernstein2008chacha}
+\babel@aux{english}{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Contributions}{1}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}System Requirements}{1}{subsection.1.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Memory footprint by architecture}}{1}{table.caption.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Mathematical Foundations}{1}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}ChaCha8 Stream Cipher}{1}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Poly1305 Message Authentication}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Key Derivation Function}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Bloom Filter Analysis}{2}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Gossip Protocol Dynamics}{2}{subsection.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Protocol Design}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}NERT Header Format}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces NERT packet structure (x86 full mode: 20-byte header)}}{2}{figure.caption.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces NERT reliability classes}}{3}{table.caption.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Reliability Classes}{3}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}RTT Estimation (Jacobson Algorithm)}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Forward Error Correction}{3}{subsection.3.4}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces FEC Encoding (4 data + 2 parity)}}{3}{algorithm.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Key Rotation with Grace Window}{3}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Motivation}{3}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Three-Key System}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Acceptance Window}{3}{subsection.4.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Key validity with grace windows at epoch boundaries}}{3}{figure.caption.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Collective Intelligence}{3}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Role Distribution}{3}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Queen Election Protocol}{3}{subsection.5.2}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Deterministic Queen Election}}{4}{algorithm.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Gradient Routing}{4}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Hebbian Routing (v0.5)}{4}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Stigmergia: Digital Pheromones (v0.5)}{4}{subsection.5.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Stigmergia pheromone grid showing danger zones (red) and queen trails (green)}}{4}{figure.caption.6}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:stigmergia-grid}{{3}{4}{Stigmergia pheromone grid showing danger zones (red) and queen trails (green)}{figure.caption.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Pheromone decay: intensity decreases by 1 per second until zero}}{4}{figure.caption.7}\protected@file@percent }
+\newlabel{fig:pheromone-decay}{{4}{4}{Pheromone decay: intensity decreases by 1 per second until zero}{figure.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Distributed Black Box: ``El Último Aliento'' (v0.5)}{5}{subsection.5.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Distributed Black Box: dying node sends last will to trusted neighbors (selected by Hebbian weight)}}{5}{figure.caption.8}\protected@file@percent }
+\newlabel{fig:blackbox-flow}{{5}{5}{Distributed Black Box: dying node sends last will to trusted neighbors (selected by Hebbian weight)}{figure.caption.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Engineering Implementation}{5}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Memory Layout (ARM Cortex-M3)}{5}{subsection.6.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}{\ignorespaces Memory configuration}}{5}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CPU Cycle Budget}{5}{subsection.6.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Computational cost per packet}}{5}{table.caption.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Supported Platforms}{5}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Security Evaluation}{5}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Threat Model}{5}{subsection.7.1}\protected@file@percent }
+\citation{rubenstein2012kilobot}
+\citation{mondada2009puck}
+\citation{bogdanov2007present}
+\citation{beaulieu2015simon}
+\citation{vahdat2000epidemic}
+\citation{das2002swim}
+\bibcite{bernstein2008chacha}{1}
+\bibcite{rubenstein2012kilobot}{2}
+\bibcite{mondada2009puck}{3}
+\bibcite{bogdanov2007present}{4}
+\bibcite{beaulieu2015simon}{5}
+\bibcite{vahdat2000epidemic}{6}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Experimental Results}{6}{subsection.7.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Attack rejection rates (test suite)}}{6}{table.caption.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Security Properties}{6}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Related Work}{6}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{6}{section.9}\protected@file@percent }
+\bibcite{das2002swim}{7}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Nonce Construction}{7}{appendix.A}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Bloom Filter Hash Functions}{7}{appendix.B}\protected@file@percent }
+\gdef \@abspage@last{7}

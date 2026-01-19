@@ -380,6 +380,10 @@ static int terrain_score_move(uint8_t nx, uint8_t ny) {
         score -= threat * 40;
     }
 
+    /* v0.5 Stigmergia: Digital pheromone influence
+     * Danger pheromones repel, Queen pheromones attract */
+    score -= stigmergia_cost_modifier(nx, ny);
+
     /* Cover bonus */
     score += terrain_get_cover(nx, ny) * 8;
 
@@ -527,6 +531,9 @@ void terrain_init(void) {
     g_state.terrain.objectives_found = 0;
     g_state.terrain.moves_made = 0;
     g_state.terrain.reports_sent = 0;
+
+    /* v0.5: Initialize stigmergia pheromone map */
+    stigmergia_init();
 }
 
 /* Execute terrain movement */
@@ -591,6 +598,10 @@ void terrain_move(void) {
     g_state.terrain.pos_y += terrain_dy[dir];
     g_state.terrain.heading = dir;
     g_state.terrain.moves_made++;
+
+    /* v0.5 Stigmergia: Pheromone maintenance */
+    stigmergia_decay();             /* Evaporate old pheromones */
+    stigmergia_emit_queen_trail();  /* Leave trail to queen */
 }
 
 /* Share terrain discoveries with swarm */
@@ -675,6 +686,9 @@ void terrain_share_discoveries(void) {
         e1000_send(&pkt, sizeof(pkt));
         g_state.packets_tx++;
     }
+
+    /* v0.5 Stigmergia: Share significant pheromones with neighbors */
+    stigmergia_share();
 }
 
 /* Process terrain initialization from dashboard */
@@ -981,3 +995,353 @@ void terrain_integrate_detections(void) {
     #undef WORLD_SIZE_MM
     #undef COORD_TO_GRID
 }
+
+/* ==========================================================================
+ * Stigmergia - Digital Pheromones with Decay (v0.5)
+ *
+ * "Ants don't memorize the map; they leave chemicals that evaporate"
+ *
+ * Implements stigmergic coordination where nodes leave virtual pheromone
+ * trails that decay over time. This creates emergent avoidance of danger
+ * zones without centralized coordination or permanent memory.
+ *
+ * Memory layout (nibbles, 4 bits each):
+ *   pheromones[y][x].data[0] = [danger:4][queen:4]
+ *   pheromones[y][x].data[1] = [resource:4][avoid:4]
+ * ========================================================================== */
+
+/* Convert terrain coordinates to stigmergia grid (2:1 scale) */
+#define TERRAIN_TO_STIG(c)  ((c) / STIGMERGIA_SCALE)
+#define STIG_GRID_SIZE      16
+
+/* Nibble access macros */
+#define NIBBLE_HI(b)        (((b) >> 4) & 0x0F)
+#define NIBBLE_LO(b)        ((b) & 0x0F)
+#define PACK_NIBBLES(hi, lo) ((((hi) & 0x0F) << 4) | ((lo) & 0x0F))
+
+/**
+ * Initialize stigmergia pheromone map
+ */
+void stigmergia_init(void) {
+    /* Clear all pheromones */
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            g_state.terrain.pheromones[y][x].data[0] = 0;
+            g_state.terrain.pheromones[y][x].data[1] = 0;
+        }
+    }
+
+    g_state.terrain.stigmergia_last_decay = ticks;
+    g_state.terrain.stigmergia_last_share = ticks;
+    g_state.terrain.stigmergia_marks_total = 0;
+    g_state.terrain.stigmergia_decays_total = 0;
+
+    serial_puts("[STIGMERGIA] Pheromone map initialized (16x16 grid)\n");
+}
+
+/**
+ * Get pheromone intensity at stigmergia grid coordinates
+ */
+static uint8_t stig_get_raw(uint8_t sx, uint8_t sy, uint8_t type) {
+    if (sx >= STIG_GRID_SIZE || sy >= STIG_GRID_SIZE) return 0;
+
+    uint8_t byte_idx = type / 2;  /* 0 for danger/queen, 1 for resource/avoid */
+    uint8_t is_hi = (type % 2) == 0;  /* danger(0), resource(2) are high nibbles */
+
+    uint8_t byte_val = g_state.terrain.pheromones[sy][sx].data[byte_idx];
+
+    return is_hi ? NIBBLE_HI(byte_val) : NIBBLE_LO(byte_val);
+}
+
+/**
+ * Set pheromone intensity at stigmergia grid coordinates
+ */
+static void stig_set_raw(uint8_t sx, uint8_t sy, uint8_t type, uint8_t intensity) {
+    if (sx >= STIG_GRID_SIZE || sy >= STIG_GRID_SIZE) return;
+    if (intensity > STIGMERGIA_INTENSITY_MAX) intensity = STIGMERGIA_INTENSITY_MAX;
+
+    uint8_t byte_idx = type / 2;
+    uint8_t is_hi = (type % 2) == 0;
+
+    uint8_t byte_val = g_state.terrain.pheromones[sy][sx].data[byte_idx];
+    uint8_t other = is_hi ? NIBBLE_LO(byte_val) : NIBBLE_HI(byte_val);
+
+    if (is_hi) {
+        g_state.terrain.pheromones[sy][sx].data[byte_idx] = PACK_NIBBLES(intensity, other);
+    } else {
+        g_state.terrain.pheromones[sy][sx].data[byte_idx] = PACK_NIBBLES(other, intensity);
+    }
+}
+
+/**
+ * Mark a pheromone at terrain coordinates
+ */
+void stigmergia_mark(uint8_t terrain_x, uint8_t terrain_y,
+                     uint8_t type, uint8_t intensity) {
+    if (type >= STIGMERGIA_TYPE_COUNT) return;
+
+    uint8_t sx = TERRAIN_TO_STIG(terrain_x);
+    uint8_t sy = TERRAIN_TO_STIG(terrain_y);
+
+    /* Get current value and take maximum (don't just add) */
+    uint8_t current = stig_get_raw(sx, sy, type);
+    if (intensity > current) {
+        stig_set_raw(sx, sy, type, intensity);
+        g_state.terrain.stigmergia_marks_total++;
+    }
+}
+
+/**
+ * Get pheromone intensity at terrain coordinates
+ */
+uint8_t stigmergia_get(uint8_t terrain_x, uint8_t terrain_y, uint8_t type) {
+    if (type >= STIGMERGIA_TYPE_COUNT) return 0;
+
+    uint8_t sx = TERRAIN_TO_STIG(terrain_x);
+    uint8_t sy = TERRAIN_TO_STIG(terrain_y);
+
+    return stig_get_raw(sx, sy, type);
+}
+
+/**
+ * Apply pheromone decay to all cells
+ * Called every STIGMERGIA_DECAY_INTERVAL_MS
+ */
+void stigmergia_decay(void) {
+    uint32_t now = ticks;
+
+    /* Check decay interval */
+    if (now - g_state.terrain.stigmergia_last_decay <
+        (STIGMERGIA_DECAY_INTERVAL_MS / 10)) {
+        return;
+    }
+    g_state.terrain.stigmergia_last_decay = now;
+
+    /* Decay all pheromones */
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            for (int t = 0; t < STIGMERGIA_TYPE_COUNT; t++) {
+                uint8_t val = stig_get_raw(x, y, t);
+                if (val > 0) {
+                    val = (val > STIGMERGIA_DECAY_AMOUNT) ?
+                          (val - STIGMERGIA_DECAY_AMOUNT) : 0;
+                    stig_set_raw(x, y, t, val);
+                }
+            }
+        }
+    }
+
+    g_state.terrain.stigmergia_decays_total++;
+}
+
+/**
+ * Propagate pheromones to neighboring cells (diffusion)
+ * High-intensity sources spread to adjacent cells
+ */
+void stigmergia_propagate(void) {
+    /* Temporary buffer for propagation (avoid read-write conflicts) */
+    uint8_t spread[STIG_GRID_SIZE][STIG_GRID_SIZE][STIGMERGIA_TYPE_COUNT];
+
+    /* Initialize spread buffer with current values */
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            for (int t = 0; t < STIGMERGIA_TYPE_COUNT; t++) {
+                spread[y][x][t] = stig_get_raw(x, y, t);
+            }
+        }
+    }
+
+    /* Calculate propagation (4-connected neighbors) */
+    static const int8_t dx[4] = { 0, 1, 0, -1 };
+    static const int8_t dy[4] = { -1, 0, 1, 0 };
+
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            for (int t = 0; t < STIGMERGIA_TYPE_COUNT; t++) {
+                uint8_t val = stig_get_raw(x, y, t);
+
+                /* Only propagate if above threshold */
+                if (val >= STIGMERGIA_PROPAGATE_THRESHOLD) {
+                    uint8_t propagate_val = val - STIGMERGIA_PROPAGATE_DECAY;
+
+                    /* Spread to neighbors */
+                    for (int d = 0; d < 4; d++) {
+                        int nx = x + dx[d];
+                        int ny = y + dy[d];
+
+                        if (nx >= 0 && nx < STIG_GRID_SIZE &&
+                            ny >= 0 && ny < STIG_GRID_SIZE) {
+                            if (propagate_val > spread[ny][nx][t]) {
+                                spread[ny][nx][t] = propagate_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Write back spread values */
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            for (int t = 0; t < STIGMERGIA_TYPE_COUNT; t++) {
+                stig_set_raw(x, y, t, spread[y][x][t]);
+            }
+        }
+    }
+}
+
+/**
+ * Calculate movement cost modifier based on pheromones
+ */
+int8_t stigmergia_cost_modifier(uint8_t terrain_x, uint8_t terrain_y) {
+    uint8_t danger = stigmergia_get(terrain_x, terrain_y, STIGMERGIA_DANGER);
+    uint8_t avoid = stigmergia_get(terrain_x, terrain_y, STIGMERGIA_AVOID);
+    uint8_t queen = stigmergia_get(terrain_x, terrain_y, STIGMERGIA_QUEEN);
+
+    int16_t modifier = 0;
+
+    /* Danger zones add significant cost */
+    modifier += danger * STIGMERGIA_DANGER_COST_MULT;
+
+    /* Avoidance zones add moderate cost */
+    modifier += avoid * STIGMERGIA_AVOID_COST_MULT;
+
+    /* Queen pheromone reduces cost (attraction) */
+    modifier -= queen * STIGMERGIA_QUEEN_COST_BONUS;
+
+    /* Clamp to int8_t range */
+    if (modifier > 127) modifier = 127;
+    if (modifier < -128) modifier = -128;
+
+    return (int8_t)modifier;
+}
+
+/**
+ * Emit danger pheromone at current position and propagate
+ */
+void stigmergia_emit_danger(uint8_t intensity) {
+    uint8_t x = g_state.terrain.pos_x;
+    uint8_t y = g_state.terrain.pos_y;
+
+    stigmergia_mark(x, y, STIGMERGIA_DANGER, intensity);
+
+    serial_puts("[STIGMERGIA] DANGER emitted at ");
+    serial_put_dec(x);
+    serial_puts(",");
+    serial_put_dec(y);
+    serial_puts(" intensity=");
+    serial_put_dec(intensity);
+    serial_puts("\n");
+
+    /* Immediate propagation for danger */
+    stigmergia_propagate();
+}
+
+/**
+ * Emit queen trail pheromone along gradient path
+ */
+void stigmergia_emit_queen_trail(void) {
+    /* Only queens and nodes with valid queen path emit trail */
+    if (g_state.role != ROLE_QUEEN &&
+        g_state.distance_to_queen >= GRADIENT_INFINITY) {
+        return;
+    }
+
+    uint8_t x = g_state.terrain.pos_x;
+    uint8_t y = g_state.terrain.pos_y;
+
+    /* Intensity decreases with distance from queen */
+    uint8_t intensity;
+    if (g_state.role == ROLE_QUEEN) {
+        intensity = STIGMERGIA_INTENSITY_MAX;
+    } else {
+        intensity = STIGMERGIA_INTENSITY_MAX - g_state.distance_to_queen;
+        if (intensity > STIGMERGIA_INTENSITY_MAX) intensity = 0;  /* Underflow check */
+    }
+
+    stigmergia_mark(x, y, STIGMERGIA_QUEEN, intensity);
+}
+
+/**
+ * Process incoming stigmergia pheromone packet
+ */
+void terrain_process_stigmergia(struct nanos_pheromone* pkt) {
+    if (pkt->payload_len < 4) return;
+
+    /* Payload format:
+     * [0]: x coordinate (stigmergia grid)
+     * [1]: y coordinate (stigmergia grid)
+     * [2]: pheromone type
+     * [3]: intensity
+     */
+    uint8_t sx = pkt->payload[0];
+    uint8_t sy = pkt->payload[1];
+    uint8_t type = pkt->payload[2];
+    uint8_t intensity = pkt->payload[3];
+
+    if (sx >= STIG_GRID_SIZE || sy >= STIG_GRID_SIZE) return;
+    if (type >= STIGMERGIA_TYPE_COUNT) return;
+
+    /* Only update if received intensity is higher than current */
+    uint8_t current = stig_get_raw(sx, sy, type);
+    if (intensity > current) {
+        stig_set_raw(sx, sy, type, intensity);
+    }
+
+    /* Relay with TTL decrement */
+    if (pkt->ttl > 0) {
+        pkt->ttl--;
+        e1000_send(pkt, sizeof(*pkt));
+    }
+}
+
+/**
+ * Share high-intensity local pheromones with neighbors
+ */
+void stigmergia_share(void) {
+    uint32_t now = ticks;
+
+    /* Share interval: 2 seconds (less frequent than terrain reports) */
+    if (now - g_state.terrain.stigmergia_last_share < 200) {
+        return;
+    }
+    g_state.terrain.stigmergia_last_share = now;
+
+    /* Find and broadcast significant pheromones */
+    for (int y = 0; y < STIG_GRID_SIZE; y++) {
+        for (int x = 0; x < STIG_GRID_SIZE; x++) {
+            for (int t = 0; t < STIGMERGIA_TYPE_COUNT; t++) {
+                uint8_t val = stig_get_raw(x, y, t);
+
+                /* Only share high-intensity pheromones */
+                if (val >= STIGMERGIA_INTENSITY_MEDIUM) {
+                    struct nanos_pheromone pkt;
+
+                    pkt.magic = NANOS_MAGIC;
+                    pkt.type = PHEROMONE_STIGMERGIA;
+                    pkt.node_id = g_state.node_id;
+                    pkt.seq = g_state.seq_num++;
+                    pkt.ttl = 3;  /* Limited propagation */
+                    pkt.hop_count = 0;
+                    pkt.distance = g_state.distance_to_queen;
+                    pkt.reserved = PKT_MAKE_ROLE(g_state.role);
+
+                    pkt.payload[0] = x;
+                    pkt.payload[1] = y;
+                    pkt.payload[2] = t;
+                    pkt.payload[3] = val;
+                    pkt.payload_len = 4;
+
+                    e1000_send(&pkt, sizeof(pkt));
+                }
+            }
+        }
+    }
+}
+
+#undef TERRAIN_TO_STIG
+#undef STIG_GRID_SIZE
+#undef NIBBLE_HI
+#undef NIBBLE_LO
+#undef PACK_NIBBLES
