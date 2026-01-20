@@ -29,7 +29,7 @@ typedef _Bool              bool;
  * ========================================================================== */
 #define NANOS_MAGIC         0x4E414E4F  /* "NANO" in hex */
 #define MULTIBOOT2_MAGIC    0x36D76289
-#define NANOS_VERSION       0x0003      /* Protocol version 0.3 */
+#define NANOS_VERSION       0x0006      /* Protocol version 0.6 */
 
 /* ==========================================================================
  * Pheromone Types - Extended language
@@ -260,6 +260,10 @@ typedef _Bool              bool;
 #define PHEROMONE_TERRAIN_ROUTE     0x87    /* Optimal path segment */
 #define PHEROMONE_STIGMERGIA        0x88    /* v0.5: Digital pheromone broadcast */
 #define PHEROMONE_LAST_WILL         0x89    /* v0.5: Dying node's testament (Black Box) */
+#define PHEROMONE_AIS_ALERT         0x8A    /* v0.6: AIS anomaly broadcast */
+#define PHEROMONE_AIS_SIGNATURE     0x8B    /* v0.6: Share detector signature */
+#define PHEROMONE_HWVAL_STATUS      0x8C    /* v0.6: Hardware validation status */
+#define PHEROMONE_HWVAL_ALERT       0x8D    /* v0.6: Hardware integrity violation */
 
 /* Sensor Ranges by Role */
 #define SENSOR_RANGE_SCOUT      6   /* EXPLORER role: 6 cell radius */
@@ -767,6 +771,22 @@ struct nanos_state {
     #define EVENT_JAMMING           0x05    /* Jamming detected */
     #define EVENT_CORRUPTION        0x06    /* Memory corruption */
     #define EVENT_KEY_ROTATE        0x07    /* Key rotation occurred */
+
+    /* AIS (Artificial Immune System) events v0.6 */
+    #define EVENT_AIS_DETECTOR_MATCH    0x10    /* Detector matched non-self */
+    #define EVENT_AIS_THYMUS_COMPLETE   0x11    /* Maturation complete */
+    #define EVENT_AIS_MEMORY_PROMOTE    0x12    /* Detector promoted to memory */
+    #define EVENT_AIS_ANOMALY_ALERT     0x13    /* Anomaly threshold reached */
+    #define EVENT_AIS_SELF_UPDATE       0x14    /* Self profile updated */
+
+    /* Hardware Validation events v0.6 */
+    #define EVENT_HWVAL_TEMP_VIOLATION  0x20    /* Temperature out of bounds */
+    #define EVENT_HWVAL_VOLTAGE_GLITCH  0x21    /* Voltage glitch detected */
+    #define EVENT_HWVAL_CLOCK_ANOMALY   0x22    /* Clock manipulation detected */
+    #define EVENT_HWVAL_MEM_CORRUPT     0x23    /* Memory canary corrupted */
+    #define EVENT_HWVAL_FLASH_TAMPER    0x24    /* Flash CRC mismatch */
+    #define EVENT_HWVAL_SENSOR_STUCK    0x25    /* Sensor not responding */
+    #define EVENT_HWVAL_COMPROMISED     0x2F    /* Hardware integrity failed */
 
     struct {
         /* Last will entries from dead neighbors */

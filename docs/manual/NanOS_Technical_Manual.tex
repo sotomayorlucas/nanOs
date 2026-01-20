@@ -1758,6 +1758,866 @@ la evidencia sobrevive con probabilidad $1 - 0.1^3 = 99.9\%$.
 ``Los muertos hablan a través de los vivos.''
 \end{infobox}
 
+%-------------------------------------------------------------------------------
+\chapter{Sistema Inmune Artificial (AIS) (v0.6)}
+%-------------------------------------------------------------------------------
+
+El sistema inmune biológico no necesita conocer los patógenos de antemano ---
+simplemente reconoce lo que \textbf{no es propio} y lo elimina. NanOS v0.6
+implementa este concepto con el algoritmo de \textbf{Selección Negativa}.
+
+\begin{infobox}[Filosofía del AIS]
+``El sistema inmune del swarm no necesita saber qué aspecto tienen los ataques ---
+solo necesita saber qué aspecto tiene `saludable'.''
+\end{infobox}
+
+\section{Conceptos Biológicos}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    concept/.style={draw, rounded corners, minimum width=3.5cm,
+                    minimum height=2cm, text centered, font=\small},
+    scale=0.9
+]
+    % Biological concepts
+    \node[concept, fill=nanossecondary!20] (bio1) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Timo}\\
+            \small Genera células T\\
+            \small Elimina auto-reactivas
+        \end{tabular}
+    };
+
+    \node[concept, fill=nanosaccent!20] (bio2) at (4.5,0) {
+        \begin{tabular}{c}
+            \textbf{Selección Negativa}\\
+            \small Solo sobreviven\\
+            \small las ``no-self''
+        \end{tabular}
+    };
+
+    \node[concept, fill=nanosgreen!20] (bio3) at (9,0) {
+        \begin{tabular}{c}
+            \textbf{Células de Memoria}\\
+            \small Detectores exitosos\\
+            \small se preservan
+        \end{tabular}
+    };
+
+    % NanOS equivalents
+    \node[concept, fill=nanosprimary!20] (nano1) at (0,-3) {
+        \begin{tabular}{c}
+            \textbf{Thymus Phase}\\
+            \small 5 segundos boot\\
+            \small Genera detectores
+        \end{tabular}
+    };
+
+    \node[concept, fill=nanosprimary!20] (nano2) at (4.5,-3) {
+        \begin{tabular}{c}
+            \textbf{Maduración}\\
+            \small Elimina detectores\\
+            \small que matchean ``self''
+        \end{tabular}
+    };
+
+    \node[concept, fill=nanosprimary!20] (nano3) at (9,-3) {
+        \begin{tabular}{c}
+            \textbf{Promoción}\\
+            \small Detectores exitosos\\
+            \small → memoria (x2 peso)
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[->, thick, gray] (bio1) -- (nano1);
+    \draw[->, thick, gray] (bio2) -- (nano2);
+    \draw[->, thick, gray] (bio3) -- (nano3);
+
+    % Labels
+    \node[font=\tiny\bfseries, above] at (4.5, 1.2) {Sistema Inmune Biológico};
+    \node[font=\tiny\bfseries, below] at (4.5, -4.2) {NanOS AIS};
+
+\end{tikzpicture}
+\caption{Mapeo de conceptos inmunológicos a la implementación NanOS}
+\label{fig:ais-concepts}
+\end{figure}
+
+\section{Estructura del Detector}
+
+Un detector es un ``anticuerpo digital'' que reconoce patrones anómalos:
+
+\begin{lstlisting}[caption={Estructura del detector AIS}]
+#define AIS_DETECTOR_COUNT      16      /* Detectores activos */
+#define AIS_DETECTOR_SIZE       8       /* Bytes por patron */
+#define AIS_AFFINITY_THRESHOLD  6       /* Bits contiguos para match */
+
+struct ais_detector {
+    uint8_t  pattern[8];        /* Patron del detector */
+    uint8_t  mask[8];           /* Que bits comparar */
+    uint8_t  state;             /* EMPTY, IMMATURE, MATURE, MEMORY */
+    uint8_t  detect_type;       /* Tipo de deteccion si conocido */
+    uint16_t matches;           /* Veces que matcheo no-self */
+    uint16_t false_positives;   /* Matcheo self (malo) */
+    uint32_t created_tick;      /* Cuando se creo */
+    uint32_t last_match_tick;   /* Ultimo match exitoso */
+};
+
+/* Estados del detector */
+#define AIS_DETECTOR_EMPTY      0x00    /* Slot disponible */
+#define AIS_DETECTOR_IMMATURE   0x01    /* En thymus, aprendiendo */
+#define AIS_DETECTOR_MATURE     0x02    /* Activo, detecta no-self */
+#define AIS_DETECTOR_MEMORY     0x03    /* Promovido a memoria */
+#define AIS_DETECTOR_ANERGIC    0x04    /* Deshabilitado (matcheo self) */
+\end{lstlisting}
+
+\section{Algoritmo de Selección Negativa}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    step/.style={draw, rounded corners, minimum width=2.8cm,
+                 minimum height=1.4cm, text centered, font=\scriptsize},
+    decision/.style={draw, diamond, aspect=2, minimum width=2cm,
+                     minimum height=1cm, text centered, font=\scriptsize},
+    arrow/.style={->, thick},
+    scale=0.85
+]
+    % Generation
+    \node[step, fill=nanossecondary!20] (gen) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{1. Generar}\\
+            Patrón aleatorio
+        \end{tabular}
+    };
+
+    % Thymus check
+    \node[decision, fill=nanosaccent!20] (thymus) at (4,0) {
+        \begin{tabular}{c}
+            ¿Matchea\\
+            ``self''?
+        \end{tabular}
+    };
+
+    % Cull
+    \node[step, fill=nanosgray!30] (cull) at (4,2.5) {
+        \begin{tabular}{c}
+            \textbf{ELIMINAR}\\
+            Auto-reactivo
+        \end{tabular}
+    };
+
+    % Mature
+    \node[step, fill=nanosgreen!20] (mature) at (8,0) {
+        \begin{tabular}{c}
+            \textbf{2. Madurar}\\
+            MADURO
+        \end{tabular}
+    };
+
+    % Detection
+    \node[decision, fill=nanosprimary!20] (detect) at (12,0) {
+        \begin{tabular}{c}
+            ¿Matchea\\
+            tráfico?
+        \end{tabular}
+    };
+
+    % Normal
+    \node[step, fill=nanosgray!20] (normal) at (12,-2.5) {
+        \begin{tabular}{c}
+            \textbf{Normal}\\
+            Sin anomalía
+        \end{tabular}
+    };
+
+    % Anomaly
+    \node[step, fill=nanosaccent!40] (anomaly) at (16,0) {
+        \begin{tabular}{c}
+            \textbf{3. ANOMALÍA}\\
+            Detectada
+        \end{tabular}
+    };
+
+    % Response actions
+    \node[step, fill=nanosgreen!30] (stigmergia) at (14,2.5) {
+        \begin{tabular}{c}
+            Emit\\
+            DANGER
+        \end{tabular}
+    };
+
+    \node[step, fill=nanosprimary!30] (blackbox) at (17,2.5) {
+        \begin{tabular}{c}
+            Record\\
+            Event
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[arrow] (gen) -- (thymus);
+    \draw[arrow] (thymus) -- node[right, font=\tiny] {SÍ} (cull);
+    \draw[arrow] (thymus) -- node[above, font=\tiny] {NO} (mature);
+    \draw[arrow] (mature) -- (detect);
+    \draw[arrow] (detect) -- node[right, font=\tiny] {NO} (normal);
+    \draw[arrow] (detect) -- node[above, font=\tiny] {SÍ} (anomaly);
+    \draw[arrow] (anomaly) -- (stigmergia);
+    \draw[arrow] (anomaly) -- (blackbox);
+    \draw[arrow, dashed] (cull) -| (gen);
+
+\end{tikzpicture}
+\caption{Flujo del algoritmo de Selección Negativa}
+\label{fig:ais-flow}
+\end{figure}
+
+\section{Extracción de Antígenos}
+
+Cada paquete se convierte en un ``antígeno'' de 8 bytes para comparación:
+
+\begin{lstlisting}[caption={Extracción de características del paquete}]
+struct ais_antigen {
+    uint8_t features[8];        /* Vector de caracteristicas */
+    uint16_t source_node;       /* Nodo origen */
+    uint8_t pheromone_type;     /* Tipo de paquete */
+    uint8_t context_flags;      /* Contexto de seguridad */
+};
+
+/* Caracteristicas extraidas del paquete */
+void ais_extract_antigen(struct nanos_pheromone* pkt,
+                         struct ais_antigen* antigen,
+                         uint8_t ctx_flags) {
+    antigen->features[0] = pkt->type;           /* Tipo */
+    antigen->features[1] = pkt->ttl;            /* TTL */
+    antigen->features[2] = pkt->hop_count;      /* Saltos */
+    antigen->features[3] = (uint8_t)pkt->node_id;  /* ID origen */
+    antigen->features[4] = pkt->distance;       /* Distancia */
+    antigen->features[5] = ctx_flags;           /* Contexto */
+    antigen->features[6] = (uint8_t)pkt->seq;   /* Secuencia */
+    antigen->features[7] = pkt->flags;          /* Flags */
+}
+\end{lstlisting}
+
+\section{Tipos de Detección}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clp{7cm}}
+\toprule
+\textbf{Código} & \textbf{Tipo} & \textbf{Descripción} \\
+\midrule
+0x01 & FLOOD & Patrón de DoS/flooding \\
+0x02 & PROBE & Reconocimiento/escaneo de red \\
+0x03 & REPLAY & Patrón de ataque de replay \\
+0x04 & INJECTION & Inyección de paquetes maliciosos \\
+0x05 & BEHAVIORAL & Comportamiento anómalo de nodo \\
+0x06 & SYBIL & Múltiples identidades desde una fuente \\
+0xFF & UNKNOWN & \textbf{Anomalía desconocida (0-day!)} \\
+\bottomrule
+\end{tabular}
+\caption{Tipos de detección del AIS}
+\label{tab:ais-detect-types}
+\end{table}
+
+\section{Perfil ``Self'' (Qué es Normal)}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[scale=0.8]
+    % Radar chart for self profile
+    \def\radius{3}
+
+    % Axes
+    \foreach \i/\label in {0/PKT\_RATE, 1/AVG\_SIZE, 2/ENTROPY, 3/SRC\_DIV,
+                           4/HMAC\_FAIL, 5/REPLAY, 6/CHURN, 7/STABILITY} {
+        \draw[gray!50] (0,0) -- ({45*\i}:\radius);
+        \node[font=\tiny, rotate={45*\i-90}] at ({45*\i}:\radius+0.7) {\label};
+    }
+
+    % Circles
+    \foreach \r in {1,2,3} {
+        \draw[gray!30] (0,0) circle (\r);
+    }
+
+    % Self profile (example values)
+    \draw[fill=nanosgreen!30, draw=nanosgreen, thick]
+        ({45*0}:1.5) -- ({45*1}:2) -- ({45*2}:1.8) -- ({45*3}:2.5)
+        -- ({45*4}:0.5) -- ({45*5}:0.3) -- ({45*6}:1.2) -- ({45*7}:2.2) -- cycle;
+
+    % Anomaly example
+    \draw[fill=nanosaccent!30, draw=nanosaccent, thick, dashed]
+        ({45*0}:2.8) -- ({45*1}:1) -- ({45*2}:0.5) -- ({45*3}:0.8)
+        -- ({45*4}:2.5) -- ({45*5}:2.2) -- ({45*6}:2.8) -- ({45*7}:0.5) -- cycle;
+
+    % Legend
+    \node[font=\small] at (5, 2) {
+        \begin{tabular}{ll}
+            \tikz\fill[nanosgreen!30] (0,0) rectangle (0.3,0.3); & Self (normal)\\
+            \tikz\fill[nanosaccent!30] (0,0) rectangle (0.3,0.3); & Anomalía
+        \end{tabular}
+    };
+
+    \node[font=\tiny, below] at (0, -4) {
+        8 dimensiones de características monitoreadas
+    };
+
+\end{tikzpicture}
+\caption{Perfil ``Self'' vs anomalía en el espacio de características}
+\label{fig:ais-self-profile}
+\end{figure}
+
+\begin{lstlisting}[caption={Características monitoreadas para el perfil ``self''}]
+/* Dimensiones del perfil self (normalizadas 0-255) */
+#define AIS_FEATURE_PKT_RATE        0   /* Paquetes por segundo */
+#define AIS_FEATURE_AVG_SIZE        1   /* Tamanio promedio */
+#define AIS_FEATURE_TYPE_ENTROPY    2   /* Entropia de tipos */
+#define AIS_FEATURE_SRC_DIVERSITY   3   /* Diversidad de fuentes */
+#define AIS_FEATURE_HMAC_FAIL_RATE  4   /* Tasa de fallos HMAC */
+#define AIS_FEATURE_REPLAY_RATE     5   /* Tasa de replays */
+#define AIS_FEATURE_NEIGHBOR_CHURN  6   /* Cambios de vecinos */
+#define AIS_FEATURE_ROUTE_STABILITY 7   /* Estabilidad de rutas */
+\end{lstlisting}
+
+\section{Integración con Otros Sistemas}
+
+Cuando el AIS detecta una anomalía, activa una respuesta coordinada:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    system/.style={draw, rounded corners, minimum width=2.5cm,
+                   minimum height=1.5cm, text centered, font=\small},
+    scale=0.85
+]
+    % AIS detection
+    \node[system, fill=nanosaccent!30] (ais) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{AIS}\\
+            Detecta anomalía
+        \end{tabular}
+    };
+
+    % Integrated systems
+    \node[system, fill=nanosgreen!30] (stigmergia) at (4,1.5) {
+        \begin{tabular}{c}
+            \textbf{Stigmergia}\\
+            Emit DANGER
+        \end{tabular}
+    };
+
+    \node[system, fill=nanosprimary!30] (blackbox) at (4,0) {
+        \begin{tabular}{c}
+            \textbf{Black Box}\\
+            Record Event
+        \end{tabular}
+    };
+
+    \node[system, fill=nanossecondary!30] (hebbian) at (4,-1.5) {
+        \begin{tabular}{c}
+            \textbf{Hebbian}\\
+            Penalizar nodo
+        \end{tabular}
+    };
+
+    \node[system, fill=nanosgray!30] (alarm) at (8,0) {
+        \begin{tabular}{c}
+            \textbf{Broadcast}\\
+            ALARM al swarm
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[->, thick] (ais) -- (stigmergia);
+    \draw[->, thick] (ais) -- (blackbox);
+    \draw[->, thick] (ais) -- (hebbian);
+    \draw[->, thick] (stigmergia) -| (alarm);
+    \draw[->, thick] (blackbox) -- (alarm);
+    \draw[->, thick] (hebbian) -| (alarm);
+
+\end{tikzpicture}
+\caption{Respuesta coordinada del AIS con otros sistemas NanOS}
+\label{fig:ais-integration}
+\end{figure}
+
+\section{API del Sistema Inmune}
+
+\begin{lstlisting}[caption={Funciones principales del AIS}]
+/* Inicializar AIS - inicia thymus phase */
+void ais_init(void);
+
+/* Llamar periodicamente desde main loop */
+void ais_tick(void);
+
+/* Procesar paquete a traves del sistema inmune */
+uint8_t ais_process_packet(struct nanos_pheromone* pkt, uint8_t ctx_flags);
+
+/* Verificar si maduracion completa */
+bool ais_is_mature(void);
+
+/* Obtener estadisticas */
+uint8_t ais_get_active_detector_count(void);
+uint32_t ais_get_detection_count(void);
+
+/* Debug */
+void ais_print_status(void);
+\end{lstlisting}
+
+\section{Eventos AIS para Black Box}
+
+\begin{lstlisting}[caption={Eventos del AIS registrados en Black Box}]
+#define EVENT_AIS_DETECTOR_MATCH    0x10    /* Detector matcheo no-self */
+#define EVENT_AIS_THYMUS_COMPLETE   0x11    /* Maduracion completa */
+#define EVENT_AIS_MEMORY_PROMOTE    0x12    /* Detector promovido */
+#define EVENT_AIS_ANOMALY_ALERT     0x13    /* Umbral de anomalia */
+#define EVENT_AIS_SELF_UPDATE       0x14    /* Perfil self actualizado */
+\end{lstlisting}
+
+\begin{infobox}[Detección de 0-Days]
+El AIS no necesita firmas de ataques conocidos. Cualquier patrón que no coincida
+con el perfil ``self'' aprendido durante la fase thymus es considerado sospechoso.
+Esto permite detectar ataques completamente nuevos (0-days) que nunca se han visto antes.
+\end{infobox}
+
+%-------------------------------------------------------------------------------
+\chapter{Polimorfismo de Código: ``El Camaleón'' (v0.6)}
+\label{chap:polymorph}
+%-------------------------------------------------------------------------------
+
+El módulo de \textbf{Polimorfismo de Código} (``El Camaleón'') proporciona diversidad
+a nivel binario, asegurando que cada nodo del swarm tenga una huella digital única.
+Esto hace imposible reutilizar exploits entre nodos.
+
+\section{Motivación}
+
+En ataques tradicionales, una vez que un atacante desarrolla un exploit para una
+vulnerabilidad, puede reutilizarlo contra cualquier sistema que ejecute el mismo binario.
+El polimorfismo rompe este paradigma:
+
+\begin{center}
+\begin{tikzpicture}[node distance=2.5cm]
+    % Nodes
+    \node[block, fill=nanosaccent!30] (attacker) {Atacante};
+    \node[block, fill=nanossecondary!30, right=of attacker] (node1) {Nodo A\\Firma 0x7A3F};
+    \node[block, fill=nanossecondary!30, right=of node1] (node2) {Nodo B\\Firma 0xB2E1};
+    \node[block, fill=nanossecondary!30, right=of node2] (node3) {Nodo C\\Firma 0x5D9C};
+
+    % Exploit arrows
+    \draw[->, thick, red] (attacker) -- (node1) node[midway, above] {Exploit A};
+    \draw[->, thick, red, dashed] (attacker.north) to[bend left=30] node[above] {?} (node2.north);
+    \draw[->, thick, red, dashed] (attacker.north) to[bend left=40] node[above] {?} (node3.north);
+
+    % Labels
+    \node[below=0.5cm of node1, text width=3cm, align=center] {\footnotesize Stack: +0x340\\Canary: 0xDEAD};
+    \node[below=0.5cm of node2, text width=3cm, align=center] {\footnotesize Stack: +0x7A0\\Canary: 0xBEEF};
+    \node[below=0.5cm of node3, text width=3cm, align=center] {\footnotesize Stack: +0x120\\Canary: 0xCAFE};
+\end{tikzpicture}
+\end{center}
+
+\begin{infobox}[Principio Fundamental]
+``Si un atacante compromete un nodo, ha ganado una batalla.
+Para comprometer el swarm, tendría que ganar miles de batallas diferentes.''
+\end{infobox}
+
+\section{Componentes del Polimorfismo}
+
+\subsection{ASLR (Address Space Layout Randomization)}
+
+Randomización del layout de memoria al boot:
+
+\begin{lstlisting}[caption={Configuración de ASLR}]
+/* Bits de entropia (limitados por constraints de MCU) */
+#define POLY_ASLR_STACK_BITS    8   /* 256 bases posibles para stack */
+#define POLY_ASLR_HEAP_BITS     6   /* 64 bases posibles para heap */
+#define POLY_ASLR_ALIGNMENT     16  /* Alineacion de 16 bytes (ARM) */
+
+#define POLY_STACK_OFFSET_MAX   4096    /* Max randomizacion stack */
+#define POLY_HEAP_OFFSET_MAX    1024    /* Max randomizacion heap */
+
+struct poly_memory_layout {
+    uint32_t stack_base;        /* Base randomizada del stack */
+    uint32_t stack_offset;      /* Offset desde base original */
+    uint32_t heap_base;         /* Base randomizada del heap */
+    uint32_t heap_offset;       /* Offset desde base original */
+    uint32_t data_offset;       /* Offset de datos estaticos */
+    uint32_t entropy_seed;      /* Semilla usada */
+};
+\end{lstlisting}
+
+\subsection{Stack Canaries}
+
+Valores aleatorios para detectar buffer overflows:
+
+\begin{lstlisting}[caption={Protección con Stack Canary}]
+struct poly_canary_state {
+    uint32_t value;         /* Valor actual del canary */
+    uint32_t backup;        /* Backup para verificacion */
+    uint32_t violations;    /* Contador de violaciones */
+    uint32_t last_check;    /* Ultimo tick de verificacion */
+    uint32_t last_refresh;  /* Ultimo tick de refresh */
+};
+
+/* Macros de instrumentacion */
+#define POLY_CANARY_PROLOGUE() \
+    uint32_t __canary = poly_canary_get()
+#define POLY_CANARY_EPILOGUE() \
+    if (__canary != poly_canary_get()) poly_canary_violated()
+
+/* Ejemplo de uso */
+POLY_PROTECTED_FUNC void critical_operation(void) {
+    POLY_CANARY_PROLOGUE();
+    /* ... codigo critico ... */
+    POLY_CANARY_EPILOGUE();
+}
+\end{lstlisting}
+
+\subsection{Firma Binaria Única}
+
+Cada nodo genera una firma de 128 bits que lo identifica:
+
+\begin{lstlisting}[caption={Estructura de Firma Binaria}]
+#define POLY_SIGNATURE_SIZE     16  /* 128 bits */
+
+struct poly_signature {
+    uint8_t  bytes[POLY_SIGNATURE_SIZE];  /* Fingerprint unico */
+    uint32_t created_tick;                 /* Cuando fue generado */
+    uint32_t node_id;                      /* ID del nodo asociado */
+    uint8_t  version;                      /* Version de firma */
+};
+
+/* La firma se deriva de:
+ * - Node ID
+ * - Hardware RNG seed
+ * - Boot timestamp
+ * - Memory layout entropy
+ */
+\end{lstlisting}
+
+\subsection{Timing Jitter}
+
+Delays aleatorios para resistir ataques de timing side-channel:
+
+\begin{lstlisting}[caption={Timing Jitter para Side-Channel Resistance}]
+#define POLY_JITTER_MIN_US      10      /* Min jitter */
+#define POLY_JITTER_MAX_US      100     /* Max jitter */
+
+#define POLY_TIMING_SAFE(code) do { \
+    poly_apply_jitter(); \
+    code; \
+    poly_apply_jitter(); \
+} while(0)
+
+/* Uso: proteger comparaciones criptograficas */
+POLY_TIMING_SAFE(
+    result = crypto_verify(expected, received);
+);
+\end{lstlisting}
+
+\section{Flujo de Inicialización}
+
+\begin{center}
+\begin{tikzpicture}[node distance=1.8cm, auto]
+    % States
+    \node[block, fill=nanosgray!30] (uninit) {UNINITIALIZED};
+    \node[block, fill=nanosaccent!30, below=of uninit] (init) {INITIALIZING};
+    \node[block, fill=nanosgreen!30, below=of init] (active) {ACTIVE};
+    \node[block, fill=red!40, right=3cm of active] (compromised) {COMPROMISED};
+
+    % Transitions
+    \draw[->, thick] (uninit) -- (init) node[midway, right] {\texttt{poly\_init()}};
+    \draw[->, thick] (init) -- (active) node[midway, right, text width=4cm] {
+        \footnotesize
+        1. Apply ASLR\\
+        2. Init canary\\
+        3. Generate signature
+    };
+    \draw[->, thick, red] (active) -- (compromised) node[midway, above] {Canary violation};
+
+    % Compromised actions
+    \node[right=0.5cm of compromised, text width=4cm, align=left] {
+        \footnotesize
+        \textbullet\ Black Box event\\
+        \textbullet\ ALARM broadcast\\
+        \textbullet\ Apoptosis
+    };
+\end{tikzpicture}
+\end{center}
+
+\section{API Principal}
+
+\begin{lstlisting}[caption={API del módulo Polimorfismo}]
+/* Inicializacion */
+int poly_init(void);
+
+/* ASLR */
+struct poly_memory_layout* poly_apply_aslr(uint32_t entropy);
+struct poly_memory_layout* poly_get_layout(void);
+
+/* Firma binaria */
+void poly_generate_signature(void);
+struct poly_signature* poly_get_signature(void);
+bool poly_verify_signature(struct poly_signature* sig);
+
+/* Stack canary */
+void poly_canary_init(void);
+uint32_t poly_canary_get(void);
+bool poly_canary_check(void);
+void poly_canary_refresh(void);
+void poly_canary_violated(void);  /* Trigger security response */
+
+/* Timing jitter */
+void poly_apply_jitter(void);
+uint16_t poly_get_jitter(void);
+void poly_randomize_jitter(void);
+
+/* Mantenimiento */
+void poly_tick(void);  /* Llamar desde main loop */
+bool poly_is_active(void);
+
+/* Debug */
+uint8_t poly_diversity_score(void);  /* 0-255, mayor = mas diverso */
+void poly_print_status(void);
+\end{lstlisting}
+
+\section{Respuesta a Violación de Canary}
+
+Cuando se detecta corrupción del stack canary:
+
+\begin{enumerate}
+    \item \textbf{Estado} $\rightarrow$ \texttt{COMPROMISED}
+    \item \textbf{Black Box}: Registra \texttt{EVENT\_CORRUPTION}
+    \item \textbf{Broadcast}: Emite \texttt{PHEROMONE\_ALARM} (0xCADEAD00)
+    \item \textbf{Apoptosis}: El nodo se auto-destruye para proteger al swarm
+\end{enumerate}
+
+\begin{lstlisting}[caption={Manejo de violación de canary}]
+void poly_canary_violated(void) {
+    /* Cambiar estado */
+    poly_state.state = POLY_STATE_COMPROMISED;
+    poly_state.canary.violations++;
+
+    /* Registrar en Black Box */
+    blackbox_record_event(EVENT_CORRUPTION, 0,
+        poly_state.canary.value, poly_state.canary.backup);
+
+    /* Alertar al swarm */
+    uint32_t alarm = 0xCADEAD00;
+    nert_send_critical(0x0000, PHEROMONE_ALARM, &alarm, 4);
+
+    /* Apoptosis */
+    hal_trigger_apoptosis();
+}
+\end{lstlisting}
+
+\section{Diversity Score}
+
+El \texttt{diversity\_score} cuantifica qué tan único es un nodo:
+
+\begin{lstlisting}[caption={Cálculo del Diversity Score}]
+uint8_t poly_diversity_score(void) {
+    uint8_t score = 0;
+
+    /* ASLR contribuye bits de entropia */
+    score += __builtin_popcount(layout.stack_offset & 0xFF) * 8;
+    score += __builtin_popcount(layout.heap_offset & 0x3F) * 8;
+
+    /* Canary contribuye bits unicos */
+    score += __builtin_popcount(canary.value) * 4;
+
+    /* Signature contribuye entropia */
+    for (int i = 0; i < 16; i++) {
+        score += __builtin_popcount(signature.bytes[i]);
+    }
+
+    return score;  /* 0-255, promedio esperado ~128 */
+}
+\end{lstlisting}
+
+\begin{infobox}[Seguridad del Swarm]
+Con polimorfismo activo, un atacante necesitaría desarrollar un exploit diferente
+para cada nodo del swarm. Para 1000 nodos con 16,384 combinaciones de ASLR cada uno,
+la complejidad del ataque crece exponencialmente.
+\end{infobox}
+
+%-------------------------------------------------------------------------------
+\chapter{Validación de Hardware: ``El Centinela del Silicio'' (v0.6)}
+\label{chap:hwval}
+%-------------------------------------------------------------------------------
+
+El módulo de \textbf{Validación de Hardware} (``El Centinela del Silicio'') proporciona
+monitoreo continuo de la integridad del hardware para detectar manipulación física,
+sensores comprometidos y ataques de fault injection.
+
+\section{Motivación}
+
+El software puede ser engañado, pero el hardware torturado revela la verdad:
+
+\begin{itemize}
+    \item \textbf{Glitching de reloj}: Manipulación de frecuencia para saltar instrucciones
+    \item \textbf{Fault injection}: Picos de voltaje para corromper datos
+    \item \textbf{Ataques térmicos}: Freeze/heat para afectar la memoria
+    \item \textbf{Sensores falsificados}: Lecturas manipuladas de temperatura/voltaje
+    \item \textbf{Firmware alterado}: Modificación no autorizada del código
+\end{itemize}
+
+\begin{center}
+\begin{tikzpicture}[node distance=2cm]
+    % Layers
+    \node[block, fill=nanosaccent!30, minimum width=6cm] (hw) {Hardware Físico};
+    \node[block, fill=nanossecondary!30, minimum width=6cm, above=0.5cm of hw] (sensors) {Sensores (Temp, Voltaje, Clock)};
+    \node[block, fill=nanosgreen!30, minimum width=6cm, above=0.5cm of sensors] (hwval) {Hardware Validation};
+    \node[block, fill=nanosprimary!30, minimum width=6cm, above=0.5cm of hwval] (sw) {Software NanOS};
+
+    % Attack arrows
+    \draw[->, thick, red] (-4,0) -- (hw.west) node[midway, above, sloped] {\tiny Fault Injection};
+    \draw[->, thick, red] (-4,1) -- (sensors.west) node[midway, above, sloped] {\tiny Sensor Tampering};
+    \draw[->, thick, red] (-4,2) -- (hwval.west) node[midway, above, sloped] {\tiny Clock Glitch};
+
+    % Detection
+    \node[right=2cm of hwval, text width=3cm, align=left] {\footnotesize Detecta anomalías\\antes de que\\afecten el software};
+\end{tikzpicture}
+\end{center}
+
+\section{Fases del Sistema}
+
+\begin{enumerate}
+    \item \textbf{CALIBRATING} (5s): Aprende baseline de sensores
+    \item \textbf{ACTIVE}: Monitoreo continuo normal
+    \item \textbf{SUSPICIOUS}: Anomalías detectadas, alerta elevada
+    \item \textbf{COMPROMISED}: Integridad fallida, apoptosis
+\end{enumerate}
+
+\section{Validación de Sensores}
+
+\begin{lstlisting}[caption={Límites físicos de sensores}]
+/* Temperatura operacional */
+#define HWVAL_TEMP_MIN_C        (-40)   /* -40C minimo */
+#define HWVAL_TEMP_MAX_C        85      /* 85C maximo */
+#define HWVAL_TEMP_DELTA_MAX    10      /* Max cambio/segundo */
+
+/* Voltaje de operacion */
+#define HWVAL_VOLTAGE_MIN_MV    2700    /* 2.7V minimo */
+#define HWVAL_VOLTAGE_MAX_MV    3600    /* 3.6V maximo */
+#define HWVAL_VOLTAGE_DELTA_MAX 100     /* Max cambio/tick (mV) */
+
+/* Tolerancia de reloj */
+#define HWVAL_CLOCK_TOLERANCE_PCT   5   /* 5% drift permitido */
+#define HWVAL_CLOCK_GLITCH_THRESH   3   /* Glitches antes de alarma */
+\end{lstlisting}
+
+\section{Canaries de Memoria}
+
+\begin{lstlisting}[caption={Protección con Memory Canaries}]
+#define HWVAL_MEM_CANARY_COUNT  4
+#define HWVAL_MEM_CANARY_MAGIC  0xC0DEBABE
+
+struct hwval_mem_canary {
+    uint32_t *address;      /* Ubicacion del canary */
+    uint32_t expected;      /* Valor esperado */
+    uint8_t  region;        /* RAM/FLASH/etc */
+    uint8_t  violated;      /* Corrupcion detectada? */
+};
+
+/* Registrar ubicacion critica */
+int idx = hwval_register_canary(&critical_var, HWVAL_REGION_RAM);
+
+/* Verificacion periodica */
+if (hwval_check_canaries() > 0) {
+    /* Memoria corrompida! */
+}
+\end{lstlisting}
+
+\section{Integridad de Flash}
+
+\begin{lstlisting}[caption={Verificación CRC de Flash}]
+struct hwval_flash_block {
+    uint32_t start_addr;    /* Direccion inicio */
+    uint32_t size;          /* Tamano del bloque */
+    uint32_t crc;           /* CRC esperado */
+};
+
+/* Registrar bloque de codigo critico */
+hwval_register_flash_block(0x08000000, 0x10000);
+
+/* Verificar integridad */
+if (!hwval_verify_flash_block(0)) {
+    /* Firmware alterado! */
+}
+\end{lstlisting}
+
+\section{Tipos de Violación}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clcl}
+\toprule
+\textbf{Código} & \textbf{Tipo} & \textbf{Severidad} & \textbf{Descripción} \\
+\midrule
+0x01 & TEMP\_RANGE & CRITICAL & Temperatura fuera de límites \\
+0x04 & VOLTAGE\_SPIKE & CRITICAL & Glitch de voltaje detectado \\
+0x06 & CLOCK\_GLITCH & CRITICAL & Glitching de reloj \\
+0x07 & MEM\_CANARY & FATAL & Canary de memoria corrompido \\
+0x08 & FLASH\_CRC & FATAL & CRC de flash no coincide \\
+0x0A & SENSOR\_STUCK & WARNING & Sensor no responde \\
+\bottomrule
+\end{tabular}
+\caption{Tipos de violación de hardware}
+\end{table}
+
+\section{Trust Score}
+
+Cada nodo calcula un ``Trust Score'' de hardware (0-255):
+
+\begin{lstlisting}[caption={Cálculo del Trust Score}]
+uint8_t hwval_trust_score(void) {
+    if (state == HWVAL_STATE_COMPROMISED) return 0;
+
+    uint8_t score = 255 - anomaly_score;
+
+    /* Penalizar por violaciones recientes */
+    score -= total_violations * 10;
+
+    return score;
+}
+\end{lstlisting}
+
+\section{API Principal}
+
+\begin{lstlisting}[caption={API del módulo Hardware Validation}]
+/* Inicializacion */
+int hwval_init(void);
+
+/* Tick periodico (llamar cada 100ms) */
+void hwval_tick(void);
+
+/* Forzar verificacion completa */
+uint8_t hwval_check_now(void);
+
+/* Hardware confiable? */
+bool hwval_is_trusted(void);
+
+/* Registrar canary de memoria */
+int hwval_register_canary(uint32_t *address, uint8_t region);
+
+/* Registrar bloque flash para CRC */
+int hwval_register_flash_block(uint32_t start, uint32_t size);
+
+/* Obtener trust score */
+uint8_t hwval_trust_score(void);
+
+/* Debug */
+void hwval_print_status(void);
+\end{lstlisting}
+
+\begin{infobox}[Defensa en Profundidad]
+Hardware Validation complementa las otras capas de seguridad:
+\begin{itemize}
+    \item \textbf{AIS} detecta anomalías de red
+    \item \textbf{Polimorfismo} hace únicos los binarios
+    \item \textbf{Hardware Validation} detecta ataques físicos
+\end{itemize}
+Un atacante debe superar todas las capas para comprometer un nodo.
+\end{infobox}
+
 %===============================================================================
 % PART II: NERT Protocol
 %===============================================================================
@@ -2624,6 +3484,75 @@ EVENT\_RATE\_LIMIT & 0x03 & Rate limit excedido \\
 EVENT\_BLACKLIST & 0x04 & Nodo en blacklist \\
 EVENT\_JAMMING & 0x05 & Jamming detectado \\
 EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
+\midrule
+\multicolumn{3}{l}{\textbf{Sistema Inmune Artificial AIS (v0.6)}} \\
+\midrule
+AIS\_DETECTOR\_COUNT & 16 & Detectores activos \\
+AIS\_DETECTOR\_SIZE & 8 & Bytes por patrón \\
+AIS\_AFFINITY\_THRESHOLD & 6 & Bits contiguos para match \\
+AIS\_MATURATION\_SAMPLES & 32 & Muestras para maduración \\
+AIS\_THYMUS\_DURATION\_MS & 5000 & Fase thymus (5s) \\
+AIS\_DETECTOR\_LIFESPAN\_MS & 300000 & Vida del detector (5min) \\
+AIS\_ANOMALY\_THRESHOLD & 3 & Detectores para alarma \\
+AIS\_MEMORY\_CELLS & 4 & Detectores de memoria \\
+AIS\_MEMORY\_BOOST & 2 & Boost para memoria \\
+AIS\_DETECT\_FLOOD & 0x01 & Detección: DoS/flooding \\
+AIS\_DETECT\_PROBE & 0x02 & Detección: escaneo \\
+AIS\_DETECT\_REPLAY & 0x03 & Detección: replay \\
+AIS\_DETECT\_INJECTION & 0x04 & Detección: inyección \\
+AIS\_DETECT\_BEHAVIORAL & 0x05 & Detección: comportamiento \\
+AIS\_DETECT\_SYBIL & 0x06 & Detección: sybil \\
+AIS\_DETECT\_UNKNOWN & 0xFF & Detección: 0-day \\
+EVENT\_AIS\_DETECTOR\_MATCH & 0x10 & Detector matcheó \\
+EVENT\_AIS\_THYMUS\_COMPLETE & 0x11 & Maduración completa \\
+EVENT\_AIS\_MEMORY\_PROMOTE & 0x12 & Promovido a memoria \\
+EVENT\_AIS\_ANOMALY\_ALERT & 0x13 & Alerta de anomalía \\
+\midrule
+\multicolumn{3}{l}{\textbf{Polimorfismo de Código ``El Camaleón'' (v0.6)}} \\
+\midrule
+POLY\_ASLR\_STACK\_BITS & 8 & Bits de entropía stack (256 bases) \\
+POLY\_ASLR\_HEAP\_BITS & 6 & Bits de entropía heap (64 bases) \\
+POLY\_ASLR\_ALIGNMENT & 16 & Alineación ARM (bytes) \\
+POLY\_STACK\_OFFSET\_MAX & 4096 & Max offset stack (bytes) \\
+POLY\_HEAP\_OFFSET\_MAX & 1024 & Max offset heap (bytes) \\
+POLY\_CANARY\_SIZE & 4 & Tamaño del canary (32 bits) \\
+POLY\_CANARY\_CHECK\_INTERVAL & 100 & Verificar cada N ticks \\
+POLY\_CANARY\_REFRESH\_MS & 60000 & Refrescar cada 60s \\
+POLY\_SIGNATURE\_SIZE & 16 & Firma única (128 bits) \\
+POLY\_SIGNATURE\_REFRESH\_MS & 300000 & Refrescar firma cada 5min \\
+POLY\_JITTER\_MIN\_US & 10 & Jitter mínimo ($\mu$s) \\
+POLY\_JITTER\_MAX\_US & 100 & Jitter máximo ($\mu$s) \\
+POLY\_NOP\_REGIONS & 4 & Regiones NOP randomizables \\
+POLY\_NOP\_MAX\_SIZE & 8 & NOPs máximos por región \\
+POLY\_STATE\_UNINITIALIZED & 0x00 & Estado: sin inicializar \\
+POLY\_STATE\_INITIALIZING & 0x01 & Estado: inicializando \\
+POLY\_STATE\_ACTIVE & 0x02 & Estado: activo \\
+POLY\_STATE\_COMPROMISED & 0xFF & Estado: canary violado \\
+\midrule
+\multicolumn{3}{l}{\textbf{Validación de Hardware ``El Centinela del Silicio'' (v0.6)}} \\
+\midrule
+HWVAL\_TICK\_INTERVAL\_MS & 100 & Intervalo de verificación (ms) \\
+HWVAL\_TEMP\_MIN\_C & -40 & Temperatura mínima (°C) \\
+HWVAL\_TEMP\_MAX\_C & 85 & Temperatura máxima (°C) \\
+HWVAL\_TEMP\_DELTA\_MAX & 10 & Max cambio temp/segundo \\
+HWVAL\_VOLTAGE\_MIN\_MV & 2700 & Voltaje mínimo (mV) \\
+HWVAL\_VOLTAGE\_MAX\_MV & 3600 & Voltaje máximo (mV) \\
+HWVAL\_VOLTAGE\_DELTA\_MAX & 100 & Max cambio voltaje/tick \\
+HWVAL\_CLOCK\_TOLERANCE\_PCT & 5 & Tolerancia drift (\%) \\
+HWVAL\_CLOCK\_GLITCH\_THRESH & 3 & Glitches antes de alarma \\
+HWVAL\_MEM\_CANARY\_COUNT & 4 & Canaries de memoria \\
+HWVAL\_MEM\_CANARY\_MAGIC & 0xC0DEBABE & Valor mágico canary \\
+HWVAL\_FLASH\_CRC\_BLOCKS & 8 & Bloques flash verificados \\
+HWVAL\_ANOMALY\_THRESHOLD & 3 & Anomalías para crítico \\
+HWVAL\_STATE\_CALIBRATING & 0x01 & Estado: calibrando \\
+HWVAL\_STATE\_ACTIVE & 0x02 & Estado: activo \\
+HWVAL\_STATE\_SUSPICIOUS & 0x03 & Estado: sospechoso \\
+HWVAL\_STATE\_COMPROMISED & 0xFF & Estado: comprometido \\
+EVENT\_HWVAL\_TEMP\_VIOLATION & 0x20 & Violación temperatura \\
+EVENT\_HWVAL\_VOLTAGE\_GLITCH & 0x21 & Glitch de voltaje \\
+EVENT\_HWVAL\_CLOCK\_ANOMALY & 0x22 & Anomalía de reloj \\
+EVENT\_HWVAL\_MEM\_CORRUPT & 0x23 & Memoria corrompida \\
+EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
 
 \caption{Constantes de configuración de NanOS/NERT}
 \label{tab:constants}
@@ -2632,6 +3561,11 @@ EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
 \chapter{Glosario}
 
 \begin{description}[style=nextline]
+    \item[AIS (v0.6)] Artificial Immune System. Sistema Inmune Artificial basado
+        en el algoritmo de Selección Negativa. Detecta anomalías sin necesidad
+        de firmas de ataques conocidos. ``El sistema inmune no necesita saber
+        cómo se ven los ataques --- solo qué aspecto tiene `saludable'.''
+
     \item[Apoptosis] Muerte celular programada. En NanOS, el proceso por el
         cual un nodo termina su ejecución de forma controlada.
 
@@ -2656,6 +3590,12 @@ EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
     \item[Grace Window] Período en límites de época donde se aceptan
         claves de épocas adyacentes.
 
+    \item[Hardware Validation (v0.6)] ``El Centinela del Silicio''. Sistema de
+        monitoreo continuo de integridad del hardware para detectar manipulación
+        física, sensores comprometidos, y ataques de fault injection. Valida
+        temperatura, voltaje, frecuencia de reloj, y memoria. ``El hardware no
+        puede mentir - pero puede ser torturado para dar falsas confesiones.''
+
     \item[HMAC] Hash-based Message Authentication Code.
 
     \item[LTD] Long-Term Depression. Debilitamiento de conexiones sinápticas
@@ -2670,6 +3610,12 @@ EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
     \item[NERT] NanOS Ephemeral Reliable Transport.
 
     \item[Pheromone] Mensaje de comunicación entre nodos del enjambre.
+
+    \item[Polimorfismo de Código (v0.6)] ``El Camaleón''. Sistema de diversidad
+        binaria que hace único a cada nodo. Incluye ASLR (randomización de
+        memoria), Stack Canaries (detección de overflow), y Binary Signatures
+        (huella digital única). ``Si un atacante compromete un nodo, ha ganado
+        una batalla. Para comprometer el swarm, tendría que ganar miles diferentes.''
 
     \item[SACK] Selective Acknowledgment.
 
@@ -2695,10 +3641,15 @@ EVENT\_CORRUPTION & 0x06 & Corrupción memoria \\
 \chapter*{Sobre Este Documento}
 \addcontentsline{toc}{chapter}{Sobre Este Documento}
 
-Este manual técnico fue generado como parte del proyecto NanOS v0.5.
+Este manual técnico fue generado como parte del proyecto NanOS v0.6.
 Cubre la arquitectura del sistema operativo, el protocolo NERT diseñado
-específicamente para comunicación entre nodos desechables, y el sistema
-de enrutamiento Hebbiano inspirado en neurociencia.
+específicamente para comunicación entre nodos desechables, el sistema
+de enrutamiento Hebbiano inspirado en neurociencia, el sistema de feromonas
+digitales Stigmergia, la Black Box distribuida para evidencia forense,
+el Sistema Inmune Artificial (AIS) para detección de ataques 0-day,
+el sistema de Polimorfismo de Código ``El Camaleón'' para diversidad binaria,
+y la Validación de Hardware ``El Centinela del Silicio'' para detección de
+manipulación física.
 
 \vspace{1cm}
 

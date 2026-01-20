@@ -78,6 +78,9 @@ This paper presents:
     \item \textbf{DoS Resilience (v0.5)}: Token bucket rate limiting and behavioral blacklisting
     \item \textbf{Stigmergia (v0.5)}: Digital pheromones with temporal decay for spatial memory
     \item \textbf{Distributed Black Box (v0.5)}: Forensic evidence preservation through ``Last Will'' transmission
+    \item \textbf{Artificial Immune System (v0.6)}: Negative Selection algorithm for 0-day anomaly detection
+    \item \textbf{Code Polymorphism (v0.6)}: Binary diversity via ASLR, stack canaries, and unique signatures
+    \item \textbf{Hardware Validation (v0.6)}: Physical layer security through sensor monitoring and fault detection
 \end{enumerate}
 
 \subsection{System Requirements}
@@ -631,6 +634,153 @@ int blackbox_query_death(uint32_t node_id,
     uint8_t *uptime_hours);
 \end{lstlisting}
 
+\subsection{Artificial Immune System (AIS) (v0.6)}
+
+The biological immune system does not require prior knowledge of pathogens---it simply recognizes ``non-self'' patterns. NanOS v0.6 implements the \textbf{Negative Selection Algorithm} for 0-day anomaly detection.
+
+\begin{definition}[Detector]
+A detector $d = (p, m)$ consists of a pattern $p \in \{0,1\}^{64}$ and mask $m \in \{0,1\}^{64}$. A detector matches antigen $a$ if:
+\begin{equation}
+\text{affinity}(d, a) = \max_{i}\{j : p[i:i+j] \oplus a[i:i+j] = 0\} \geq \theta
+\end{equation}
+where $\theta = 6$ bits (r-contiguous matching threshold).
+\end{definition}
+
+\begin{definition}[Negative Selection]
+During the \textbf{thymus phase} (5 seconds at boot), detectors are generated randomly and tested against ``self'' samples. Detectors that match self are eliminated (anergy), ensuring mature detectors only recognize ``non-self.''
+\begin{equation}
+D_{\text{mature}} = \{d \in D_{\text{generated}} : \forall s \in S_{\text{self}}, \text{affinity}(d, s) < \theta\}
+\end{equation}
+\end{definition}
+
+\begin{theorem}[0-Day Detection]
+Unlike signature-based systems, AIS detects anomalies without prior attack knowledge. Any traffic pattern that does not match the learned ``self'' profile triggers an alert. This enables detection of previously unknown attacks (0-days).
+\end{theorem}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.7]
+    % Thymus phase
+    \node[draw, rounded corners, fill=blue!20, minimum width=2cm, minimum height=1cm] (gen) at (0,0) {\tiny Generate};
+    \node[draw, diamond, fill=red!20, minimum width=1.5cm] (check) at (3,0) {\tiny Match self?};
+    \node[draw, rounded corners, fill=gray!30, minimum width=1.5cm, minimum height=0.8cm] (cull) at (3,2) {\tiny Cull};
+    \node[draw, rounded corners, fill=green!20, minimum width=2cm, minimum height=1cm] (mature) at (6,0) {\tiny Mature};
+
+    % Detection phase
+    \node[draw, diamond, fill=orange!20, minimum width=1.5cm] (detect) at (9,0) {\tiny Match traffic?};
+    \node[draw, rounded corners, fill=red!40, minimum width=2cm, minimum height=1cm] (alert) at (12,0) {\tiny ANOMALY};
+
+    % Arrows
+    \draw[->, thick] (gen) -- (check);
+    \draw[->, thick] (check) -- node[right, font=\tiny] {Yes} (cull);
+    \draw[->, thick] (check) -- node[above, font=\tiny] {No} (mature);
+    \draw[->, thick] (mature) -- (detect);
+    \draw[->, thick] (detect) -- node[above, font=\tiny] {Yes} (alert);
+    \draw[->, dashed] (cull) -| (gen);
+
+    % Labels
+    \node[font=\tiny, below] at (1.5, -1) {Thymus Phase};
+    \node[font=\tiny, below] at (10.5, -1) {Detection Phase};
+\end{tikzpicture}
+\caption{AIS Negative Selection: detectors that match ``self'' are eliminated}
+\label{fig:ais-negative-selection}
+\end{figure}
+
+\textbf{Integration}: When AIS detects an anomaly, it triggers a coordinated response:
+\begin{itemize}
+    \item \textbf{Stigmergia}: Emits DANGER pheromone at current location
+    \item \textbf{Black Box}: Records EVENT\_AIS\_ANOMALY\_ALERT
+    \item \textbf{Hebbian}: Applies LTD (depression) to source node's weight
+    \item \textbf{Broadcast}: Sends ALARM pheromone to swarm
+\end{itemize}
+
+\subsection{Code Polymorphism: ``El Camaleón'' (v0.6)}
+
+Traditional exploits can be replayed against any node running identical binaries.
+NanOS v0.6 introduces \textbf{Code Polymorphism} to ensure each node has a unique
+binary fingerprint, making mass exploitation infeasible.
+
+\textbf{ASLR} (Address Space Layout Randomization):
+\begin{itemize}
+    \item Stack base: 8 bits of entropy (256 possible bases)
+    \item Heap base: 6 bits of entropy (64 possible bases)
+    \item Combined: $2^{14} = 16,384$ layout combinations per node
+\end{itemize}
+
+\textbf{Stack Canaries}: Random 32-bit values placed on stack to detect buffer overflows.
+Canary violations trigger immediate security response (Black Box event + apoptosis).
+
+\textbf{Binary Signatures}: Each node generates a unique 128-bit fingerprint derived from:
+\[
+\text{Signature} = H(\text{node\_id} \| \text{RNG\_seed} \| \text{boot\_tick} \| \text{ASLR\_entropy})
+\]
+
+\textbf{Timing Jitter}: Random delays of $[10, 100]\mu s$ applied to cryptographic operations
+to mitigate timing side-channel attacks.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=0.75]
+    % Node boxes with different fingerprints
+    \foreach \i/\sig in {0/0x7A3F, 3/0xB2E1, 6/0x5D9C, 9/0xF812} {
+        \draw[fill=blue!20, rounded corners] (\i, 0) rectangle (\i+2, 1.5);
+        \node at (\i+1, 1.1) {\footnotesize Node};
+        \node[font=\tiny] at (\i+1, 0.5) {Sig: \sig};
+    }
+
+    % Attacker
+    \node[draw, fill=red!30, rounded corners] at (-1.5, 0.75) {Attacker};
+
+    % Exploit arrows
+    \draw[->, thick, red] (-0.5, 0.75) -- (0, 0.75);
+    \draw[->, thick, red, dashed] (-0.5, 1.2) to[bend left=20] (3, 1.5);
+    \node[font=\tiny, above] at (1.25, 1.7) {Different exploit needed};
+\end{tikzpicture}
+\caption{Code Polymorphism: each node requires a unique exploit}
+\label{fig:code-polymorphism}
+\end{figure}
+
+\textbf{Diversity Score}: Quantifies uniqueness ($0$--$255$, higher = more diverse):
+\[
+\text{Score} = \text{popcount}(\text{stack\_offset}) \cdot 8 + \text{popcount}(\text{heap\_offset}) \cdot 8 + \sum_{i=0}^{15} \text{popcount}(\text{sig}[i])
+\]
+
+\subsection{Hardware Validation: ``El Centinela del Silicio'' (v0.6)}
+
+Software can be fooled, but tortured hardware reveals the truth. NanOS v0.6 implements
+\textbf{Hardware Validation} to detect physical manipulation, sensor tampering, and fault injection attacks.
+
+\textbf{Sensor Monitoring}: Continuous validation of physical parameters:
+\begin{itemize}
+    \item Temperature: $[-40, 85]$°C operating range, max $\Delta T = 10$°C/s
+    \item Voltage: $[2.7, 3.6]$V operating range, glitch detection at $\Delta V > 100$mV
+    \item Clock: 5\% drift tolerance, 3 consecutive glitches trigger alarm
+\end{itemize}
+
+\textbf{Memory Canaries}: Random values placed at critical locations:
+\begin{equation}
+\text{Canary}_i = \texttt{0xC0DEBABE} \oplus \text{address}_i
+\end{equation}
+If $\text{Canary}_i^{\text{current}} \neq \text{Canary}_i^{\text{expected}}$, memory corruption is detected.
+
+\textbf{Flash CRC}: Registered code blocks are verified periodically:
+\begin{equation}
+\text{Valid} = \text{CRC32}(\text{flash}[a:a+s]) = \text{CRC32}_{\text{baseline}}
+\end{equation}
+
+\textbf{Trust Score}: Hardware trustworthiness quantified as:
+\begin{equation}
+\text{TrustScore} = 255 - \text{AnomalyScore} - 10 \cdot |\text{Violations}|
+\end{equation}
+
+\textbf{Defense in Depth}: Hardware Validation complements other security layers:
+\begin{itemize}
+    \item AIS detects network anomalies
+    \item Polymorphism makes binaries unique
+    \item Hardware Validation detects physical attacks
+\end{itemize}
+An attacker must defeat all layers to compromise a node.
+
 \section{Engineering Implementation}
 
 \subsection{Memory Layout (ARM Cortex-M3)}
@@ -760,9 +910,18 @@ NanOS with NERT demonstrates that secure, reliable swarm communication is achiev
     \item \textbf{DoS resilience (v0.5)}: Per-node rate limiting and behavioral reputation system
     \item \textbf{Stigmergia (v0.5)}: Digital pheromones with temporal decay for emergent spatial coordination
     \item \textbf{Distributed Black Box (v0.5)}: ``Last Will'' forensic evidence that survives node death
+    \item \textbf{Artificial Immune System (v0.6)}: Negative Selection for 0-day anomaly detection without signatures
+    \item \textbf{Code Polymorphism (v0.6)}: ``El Camaleón'' --- binary diversity preventing exploit reuse across nodes
+    \item \textbf{Hardware Validation (v0.6)}: ``El Centinela del Silicio'' --- physical layer security through sensor monitoring and fault detection
 \end{enumerate}
 
 Version 0.5 introduces a ``distributed brain'' where the swarm learns from experience: successful communications strengthen synaptic weights while failures cause severe depression, enabling automatic route optimization without central coordination. The stigmergia system adds spatial memory through evaporating pheromones, while the black box ensures forensic evidence survives even when nodes are compromised and terminated.
+
+Version 0.6 adds an \textbf{Artificial Immune System} (AIS) based on the Negative Selection algorithm. Unlike signature-based intrusion detection, AIS learns what ``normal'' traffic looks like and flags anything that deviates---enabling detection of previously unknown attacks (0-days). The system integrates with all previous mechanisms: detected anomalies trigger DANGER pheromones (stigmergia), are recorded for forensics (black box), and penalize the source node's reputation (Hebbian).
+
+Version 0.6 also introduces \textbf{Code Polymorphism} (``El Camaleón''), ensuring each node has a unique binary fingerprint. Through ASLR (stack and heap randomization), stack canaries, 128-bit binary signatures, and timing jitter, exploits developed for one node cannot be replayed against others. With $2^{14}$ ASLR combinations per node, compromising a 1000-node swarm requires developing 1000 unique exploits---fundamentally changing the economics of attack.
+
+Finally, v0.6 introduces \textbf{Hardware Validation} (``El Centinela del Silicio''), providing physical layer security through continuous monitoring of temperature, voltage, and clock frequency. Memory canaries detect unauthorized modifications, while flash CRC verification catches firmware tampering. The system computes a hardware ``Trust Score'' that other security layers can use to assess node reliability. This completes a defense-in-depth architecture where attackers must simultaneously defeat network-level (AIS), binary-level (Polymorphism), and physical-level (Hardware Validation) protections.
 
 Future work includes formal verification of the protocol state machine and evaluation on physical swarm hardware.
 

@@ -1,4 +1,4 @@
-# NanOS Ephemeral Reliable Transport (NERT) Protocol v1.2
+# NanOS Ephemeral Reliable Transport (NERT) Protocol v1.4
 
 ## Overview
 
@@ -892,9 +892,686 @@ P(evidencia sobrevive) = 1 - 0.001 = 99.9%
 
 ---
 
-## 10. Handshake de Conexión Reliable
+## 10. Sistema Inmune Artificial (AIS) (v0.6)
 
-### 10.1 Two-Way Handshake (simplificado)
+### 10.1 Concepto
+
+El sistema inmune biológico no necesita conocer los ataques de antemano - simplemente reconoce lo que **no es propio**. NanOS v0.6 implementa este concepto con el algoritmo de **Selección Negativa**.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Analogía Inmune                               │
+├─────────────────────────────────────────────────────────────────┤
+│  Sistema Inmune Real:        │  NanOS AIS:                      │
+│  - Células T en el timo      │  - Detectores en thymus phase    │
+│  - Elimina auto-reactivas    │  - Elimina los que match "self"  │
+│  - Detecta "no propio"       │  - Detecta tráfico anómalo       │
+│  - Células de memoria        │  - Detectores promovidos         │
+│  - Sin firmas de patógenos   │  - Sin firmas de ataques         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Fases del Sistema
+
+| Fase | Duración | Propósito |
+|------|----------|-----------|
+| THYMUS | 5 segundos (boot) | Recolectar muestras "self", madurar detectores |
+| DETECTION | Permanente | Comparar tráfico contra detectores maduros |
+| RESPONSE | Instantáneo | Emitir DANGER, alertar swarm, penalizar nodo |
+
+### 10.3 Estructura de Detector
+
+```c
+#define AIS_DETECTOR_COUNT      16      /* Detectores activos */
+#define AIS_DETECTOR_SIZE       8       /* Bytes por patrón */
+#define AIS_AFFINITY_THRESHOLD  6       /* Bits contiguos para match */
+
+struct ais_detector {
+    uint8_t  pattern[8];        /* Patrón del detector */
+    uint8_t  mask[8];           /* Qué bits comparar */
+    uint8_t  state;             /* EMPTY, IMMATURE, MATURE, MEMORY */
+    uint8_t  detect_type;       /* Tipo de detección */
+    uint16_t matches;           /* Veces que matcheó */
+    uint16_t false_positives;   /* Matcheó "self" (malo) */
+    uint32_t created_tick;      /* Cuándo se creó */
+};
+```
+
+### 10.4 Algoritmo de Selección Negativa
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Ciclo de Vida del Detector                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. GENERACIÓN                                                   │
+│     └── Crear patrón aleatorio                                   │
+│              │                                                   │
+│              ▼                                                   │
+│  2. THYMUS PHASE (selección negativa)                           │
+│     ├── ¿Matchea con "self"? ──SÍ──► ELIMINAR (anérgico)        │
+│     │                                                            │
+│     └── NO                                                       │
+│          │                                                       │
+│          ▼                                                       │
+│  3. MADURACIÓN                                                   │
+│     └── Detector sobrevive → MADURO                              │
+│              │                                                   │
+│              ▼                                                   │
+│  4. DETECCIÓN ACTIVA                                             │
+│     ├── Tráfico normal: sin match                                │
+│     │                                                            │
+│     └── ¿Matchea tráfico? ──SÍ──► ANOMALÍA DETECTADA            │
+│                                    ├── Emitir DANGER             │
+│                                    ├── Alertar swarm             │
+│                                    └── ¿Exitoso? → MEMORIA       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 10.5 Extracción de Características (Antígeno)
+
+Cada paquete se convierte en un "antígeno" de 8 bytes:
+
+```c
+struct ais_antigen {
+    uint8_t features[8];        /* Vector de características */
+    uint16_t source_node;       /* Nodo origen */
+    uint8_t pheromone_type;     /* Tipo de paquete */
+    uint8_t context_flags;      /* Contexto de seguridad */
+};
+
+/* Características extraídas */
+features[0] = pkt->type;                    /* Tipo de paquete */
+features[1] = pkt->ttl;                     /* Time-to-live */
+features[2] = pkt->hop_count;               /* Saltos realizados */
+features[3] = (uint8_t)(pkt->node_id);      /* ID origen (low) */
+features[4] = pkt->distance;                /* Distancia a reina */
+features[5] = ctx_flags;                    /* Flags de contexto */
+features[6] = (uint8_t)(pkt->seq);          /* Secuencia (low) */
+features[7] = flags_version;                /* Flags + versión */
+```
+
+### 10.6 Tipos de Detección
+
+| Tipo | Código | Descripción |
+|------|--------|-------------|
+| FLOOD | 0x01 | Patrón de DoS/flooding |
+| PROBE | 0x02 | Reconocimiento/escaneo |
+| REPLAY | 0x03 | Patrón de replay attack |
+| INJECTION | 0x04 | Inyección de paquetes maliciosos |
+| BEHAVIORAL | 0x05 | Comportamiento anómalo de nodo |
+| SYBIL | 0x06 | Múltiples identidades desde una fuente |
+| UNKNOWN | 0xFF | Anomalía desconocida (¡0-day!) |
+
+### 10.7 Perfil "Self" (Qué es Normal)
+
+```c
+struct ais_self_profile {
+    uint8_t features[8];        /* Valores actuales */
+    uint8_t min[8];             /* Mínimos observados */
+    uint8_t max[8];             /* Máximos observados */
+    uint8_t variance[8];        /* Varianza aceptable */
+    uint32_t samples;           /* Muestras recolectadas */
+};
+
+/* Características monitoreadas */
+#define AIS_FEATURE_PKT_RATE        0   /* Paquetes por segundo */
+#define AIS_FEATURE_AVG_SIZE        1   /* Tamaño promedio */
+#define AIS_FEATURE_TYPE_ENTROPY    2   /* Entropía de tipos */
+#define AIS_FEATURE_SRC_DIVERSITY   3   /* Diversidad de fuentes */
+#define AIS_FEATURE_HMAC_FAIL_RATE  4   /* Tasa de fallos HMAC */
+#define AIS_FEATURE_REPLAY_RATE     5   /* Tasa de replays */
+#define AIS_FEATURE_NEIGHBOR_CHURN  6   /* Cambios de vecinos */
+#define AIS_FEATURE_ROUTE_STABILITY 7   /* Estabilidad de rutas */
+```
+
+### 10.8 Integración con Otros Sistemas
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Flujo de Respuesta AIS                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Paquete Recibido                                               │
+│        │                                                         │
+│        ▼                                                         │
+│  ┌─────────────────┐                                            │
+│  │ Extraer Antígeno│                                            │
+│  └────────┬────────┘                                            │
+│           │                                                      │
+│           ▼                                                      │
+│  ┌─────────────────┐      ┌───────────────────────────────┐     │
+│  │ ¿Match con      │──NO──│ Tráfico normal, continuar      │     │
+│  │ detectores?     │      └───────────────────────────────┘     │
+│  └────────┬────────┘                                            │
+│           │ SÍ (≥3 detectores)                                   │
+│           ▼                                                      │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                 ANOMALÍA DETECTADA                       │    │
+│  ├─────────────────────────────────────────────────────────┤    │
+│  │                                                          │    │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │    │
+│  │  │  STIGMERGIA  │  │  BLACK BOX   │  │   HEBBIAN    │   │    │
+│  │  │  Emit DANGER │  │ Record Event │  │ Penalizar    │   │    │
+│  │  │  pheromone   │  │ AIS_ANOMALY  │  │ nodo origen  │   │    │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘   │    │
+│  │                                                          │    │
+│  │  ┌──────────────────────────────────────────────────┐   │    │
+│  │  │              BROADCAST ALARM                      │   │    │
+│  │  │  Alertar al swarm sobre el nodo sospechoso       │   │    │
+│  │  └──────────────────────────────────────────────────┘   │    │
+│  │                                                          │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 10.9 API del Sistema Inmune
+
+```c
+/* Inicializar AIS - inicia thymus phase */
+void ais_init(void);
+
+/* Llamar periódicamente desde main loop */
+void ais_tick(void);
+
+/* Procesar paquete a través del sistema inmune */
+uint8_t ais_process_packet(struct nanos_pheromone* pkt, uint8_t ctx_flags);
+
+/* Verificar si maduración completa */
+bool ais_is_mature(void);
+
+/* Obtener estadísticas */
+uint8_t ais_get_active_detector_count(void);
+uint32_t ais_get_detection_count(void);
+
+/* Debug */
+void ais_print_status(void);
+```
+
+### 10.10 Eventos AIS para Black Box
+
+```c
+#define EVENT_AIS_DETECTOR_MATCH    0x10    /* Detector matcheó no-self */
+#define EVENT_AIS_THYMUS_COMPLETE   0x11    /* Maduración completa */
+#define EVENT_AIS_MEMORY_PROMOTE    0x12    /* Detector promovido a memoria */
+#define EVENT_AIS_ANOMALY_ALERT     0x13    /* Umbral de anomalía alcanzado */
+#define EVENT_AIS_SELF_UPDATE       0x14    /* Perfil self actualizado */
+```
+
+### 10.11 Ventajas del AIS
+
+| Característica | Beneficio |
+|----------------|-----------|
+| Sin firmas | Detecta ataques 0-day desconocidos |
+| Adaptativo | Aprende qué es "normal" para este nodo |
+| Distribuido | Cada nodo tiene su propio sistema inmune |
+| Integrado | Usa Stigmergia, Black Box, Hebbian |
+| Eficiente | 16 detectores × 8 bytes = 128 bytes |
+
+> "El sistema inmune del swarm no necesita saber qué aspecto tienen los ataques -
+> solo necesita saber qué aspecto tiene 'saludable'."
+
+---
+
+## 11. Polimorfismo de Código: "El Camaleón" (v0.6)
+
+### 11.1 Concepto
+
+Si un atacante desarrolla un exploit para un nodo NanOS, ¿puede reutilizarlo en todos los demás? **No**, gracias al polimorfismo de código. Cada nodo tiene una disposición de memoria y firma binaria única.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Analogía del Camaleón                         │
+├─────────────────────────────────────────────────────────────────┤
+│  Nodo A:               │  Nodo B:               │  Nodo C:       │
+│  Stack: 0x7FF00        │  Stack: 0x7FE80        │  Stack: 0x7FD20│
+│  Heap:  0x20100        │  Heap:  0x20240        │  Heap:  0x20380│
+│  Canary: 0xDEADBEEF    │  Canary: 0xCAFEBABE    │  Canary: 0x8BADF00D│
+│  Sig: A1B2C3D4...      │  Sig: E5F6G7H8...      │  Sig: I9J0K1L2...│
+│                        │                        │                │
+│  "Mismo código, pero cada instancia es única"                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 Mecanismos de Diversidad
+
+| Mecanismo | Descripción | Bits de Entropía |
+|-----------|-------------|------------------|
+| ASLR Stack | Offset aleatorio del stack | 8 bits (256 posiciones) |
+| ASLR Heap | Offset aleatorio del heap | 6 bits (64 posiciones) |
+| Stack Canary | Valor aleatorio anti-overflow | 32 bits |
+| Firma Binaria | Fingerprint único por nodo | 128 bits |
+| Timing Jitter | Retraso aleatorio anti-timing | Variable |
+
+### 11.3 ASLR (Address Space Layout Randomization)
+
+```c
+#define POLY_ASLR_STACK_BITS    8       /* 256 posiciones de stack */
+#define POLY_ASLR_HEAP_BITS     6       /* 64 posiciones de heap */
+#define POLY_ASLR_ALIGNMENT     16      /* Alineación de 16 bytes */
+#define POLY_STACK_OFFSET_MAX   4096    /* Max offset de stack */
+#define POLY_HEAP_OFFSET_MAX    1024    /* Max offset de heap */
+
+struct poly_memory_layout {
+    uint32_t stack_base;        /* Base de stack randomizada */
+    uint32_t stack_offset;      /* Offset desde base original */
+    uint32_t heap_base;         /* Base de heap randomizada */
+    uint32_t heap_offset;       /* Offset desde base original */
+    uint32_t entropy_seed;      /* Semilla usada */
+};
+```
+
+### 11.4 Stack Canary (Detección de Buffer Overflow)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Layout del Stack con Canary                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Direcciones altas                                               │
+│  ┌────────────────────┐                                         │
+│  │ Return Address     │ ← Objetivo del atacante                 │
+│  ├────────────────────┤                                         │
+│  │ Saved Frame Ptr    │                                         │
+│  ├────────────────────┤                                         │
+│  │ ▓▓▓ CANARY ▓▓▓     │ ← Valor aleatorio único (32 bits)       │
+│  ├────────────────────┤                                         │
+│  │ Variables locales  │                                         │
+│  │ ...                │                                         │
+│  │ Buffer[N]          │ ← Overflow aquí corrompe el canary      │
+│  └────────────────────┘                                         │
+│  Direcciones bajas                                               │
+│                                                                  │
+│  Si canary ≠ valor esperado → VIOLACIÓN → Apoptosis inmediata   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```c
+/* API del Canary */
+void poly_canary_init(void);           /* Inicializar con valor random */
+uint32_t poly_canary_get(void);        /* Obtener valor actual */
+bool poly_canary_check(void);          /* Verificar integridad */
+void poly_canary_refresh(void);        /* Rotar a nuevo valor */
+void poly_canary_violated(void);       /* Manejar violación */
+
+/* Macros para proteger funciones */
+#define POLY_CANARY_PROLOGUE() uint32_t __canary = poly_canary_get()
+#define POLY_CANARY_EPILOGUE() if (__canary != poly_canary_get()) poly_canary_violated()
+```
+
+### 11.5 Firma Binaria Única
+
+Cada nodo genera un "fingerprint" único de 128 bits que incorpora:
+- Node ID
+- Offsets de memoria (ASLR)
+- Valor del canary
+- Entropía aleatoria
+
+```c
+struct poly_signature {
+    uint8_t  bytes[16];         /* Fingerprint único (128 bits) */
+    uint32_t created_tick;      /* Cuando se generó */
+    uint32_t node_id;           /* ID del nodo asociado */
+    uint8_t  version;           /* Versión de la firma */
+};
+
+/* Un exploit que funciona en Nodo A NO funcionará en Nodo B */
+```
+
+### 11.6 Timing Jitter (Resistencia a Side-Channels)
+
+```c
+#define POLY_JITTER_MIN_US      10      /* Mínimo 10 μs */
+#define POLY_JITTER_MAX_US      100     /* Máximo 100 μs */
+
+/* Insertar retraso aleatorio en operaciones críticas */
+#define POLY_TIMING_SAFE(code) do { \
+    poly_apply_jitter(); \
+    code; \
+    poly_apply_jitter(); \
+} while(0)
+```
+
+### 11.7 Score de Diversidad
+
+Cada nodo calcula un "score de diversidad" (0-255) que indica cuán diferente es de una compilación estándar:
+
+```c
+uint8_t poly_diversity_score(void);
+
+/* Componentes del score:
+ * - ASLR stack offset:      0-40 puntos
+ * - ASLR heap offset:       0-40 puntos
+ * - Canary entropy:         0-50 puntos
+ * - Signature uniqueness:   0-80 puntos
+ * - Timing jitter:          0-45 puntos
+ * ─────────────────────────────────────
+ * Máximo teórico:           255 puntos
+ */
+```
+
+### 11.8 API del Sistema de Polimorfismo
+
+```c
+/* Inicialización (muy temprano en boot) */
+int poly_init(void);
+
+/* ASLR */
+struct poly_memory_layout* poly_apply_aslr(uint32_t entropy);
+struct poly_memory_layout* poly_get_layout(void);
+
+/* Firma binaria */
+void poly_generate_signature(void);
+struct poly_signature* poly_get_signature(void);
+bool poly_verify_signature(struct poly_signature* sig);
+
+/* Mantenimiento periódico */
+void poly_tick(void);
+
+/* Estado */
+bool poly_is_active(void);
+struct poly_state* poly_get_state(void);
+void poly_print_status(void);
+```
+
+### 11.9 Respuesta a Violaciones
+
+Cuando se detecta corrupción del canary:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Flujo de Violación de Canary                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  poly_canary_check()                                            │
+│        │                                                         │
+│        ▼                                                         │
+│  ┌─────────────────┐                                            │
+│  │ ¿Canary intacto?│                                            │
+│  └────────┬────────┘                                            │
+│           │ NO                                                   │
+│           ▼                                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                VIOLACIÓN DETECTADA                        │   │
+│  ├──────────────────────────────────────────────────────────┤   │
+│  │  1. Estado → COMPROMISED                                  │   │
+│  │  2. Black Box: EVENT_CORRUPTION                           │   │
+│  │  3. Broadcast: PHEROMONE_ALARM (0xCADEAD00)              │   │
+│  │  4. Apoptosis de emergencia                               │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 11.10 Ventajas del Polimorfismo
+
+| Característica | Beneficio |
+|----------------|-----------|
+| Diversidad | Cada nodo es único - exploits no son reutilizables |
+| Detección | Canary detecta buffer overflows |
+| Tiempo | Jitter dificulta ataques de timing |
+| Evidencia | Violaciones se registran en Black Box |
+| Auto-defensa | Nodo comprometido se auto-destruye |
+
+> "Si un atacante compromete un nodo, ha ganado una batalla.
+> Pero para comprometer el swarm, tendría que ganar miles de batallas diferentes."
+
+---
+
+## 12. Validación de Hardware: "El Centinela del Silicio" (v0.6)
+
+### 12.1 Concepto
+
+El software puede mentir, pero el hardware torturado revela la verdad. NanOS v0.6 implementa validación continua del hardware para detectar manipulación física, sensores comprometidos y ataques de fault injection.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Capas de Validación                          │
+├─────────────────────────────────────────────────────────────────┤
+│  Capa              │  Qué Detecta                                │
+│  ─────────────────────────────────────────────────────────────  │
+│  Sensores          │  Lecturas fuera de límites físicos         │
+│  Reloj             │  Glitching, manipulación de frecuencia     │
+│  Voltaje           │  Fault injection, power analysis           │
+│  Memoria           │  Canaries corrompidos, flash alterado      │
+│  Temperatura       │  Ataques freeze/heat para fault injection  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 12.2 Fases del Sistema
+
+| Fase | Duración | Propósito |
+|------|----------|-----------|
+| CALIBRATING | 5 segundos | Aprender baseline de sensores |
+| ACTIVE | Permanente | Monitoreo continuo |
+| SUSPICIOUS | Variable | Anomalías detectadas, alertado |
+| COMPROMISED | Terminal | Hardware no confiable, apoptosis |
+
+### 12.3 Validación de Sensores
+
+```c
+/* Límites físicos de sensores */
+#define HWVAL_TEMP_MIN_C        (-40)   /* -40°C mínimo operacional */
+#define HWVAL_TEMP_MAX_C        85      /* 85°C máximo operacional */
+#define HWVAL_TEMP_DELTA_MAX    10      /* Max cambio por segundo (°C) */
+
+#define HWVAL_VOLTAGE_MIN_MV    2700    /* 2.7V mínimo */
+#define HWVAL_VOLTAGE_MAX_MV    3600    /* 3.6V máximo */
+#define HWVAL_VOLTAGE_DELTA_MAX 100     /* Max cambio por tick (mV) */
+
+struct hwval_sensor_current {
+    int16_t  temperature;       /* Temp actual (0.1°C) */
+    int16_t  temp_prev;         /* Lectura anterior */
+    uint16_t voltage;           /* VCC actual (mV) */
+    uint16_t voltage_prev;      /* Lectura anterior */
+    uint32_t clock_ticks;       /* Ticks en intervalo */
+};
+```
+
+### 12.4 Validación de Reloj (Anti-Glitching)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Detección de Clock Glitch                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Frecuencia Normal:  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁   │
+│                      └────────────────────────────────────────┘  │
+│                      100% ± 5% tolerancia                        │
+│                                                                  │
+│  Glitch Detectado:   ▁▁▁▁▁▄▁▁▁▁▁▁▁▁▃▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁   │
+│                           ↑             ↑         ↑              │
+│                        glitch_1      glitch_2  glitch_3          │
+│                                                                  │
+│  Después de 3 glitches consecutivos → HWVAL_VIOLATION_CLOCK_GLITCH │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```c
+#define HWVAL_CLOCK_TOLERANCE_PCT   5   /* 5% drift permitido */
+#define HWVAL_CLOCK_GLITCH_THRESH   3   /* Glitches antes de alarma */
+
+uint8_t hwval_validate_clock(uint32_t actual_ticks, uint32_t interval_ms) {
+    uint32_t expected = (baseline.clock_freq * interval_ms) / 1000;
+    uint32_t drift_pct = abs(actual - expected) * 100 / expected;
+
+    if (drift_pct > HWVAL_CLOCK_TOLERANCE_PCT) {
+        clock_glitches++;
+        if (clock_glitches >= HWVAL_CLOCK_GLITCH_THRESH) {
+            return HWVAL_VIOLATION_CLOCK_GLITCH;  /* ¡Ataque! */
+        }
+    }
+    return HWVAL_VIOLATION_NONE;
+}
+```
+
+### 12.5 Canaries de Memoria
+
+```c
+#define HWVAL_MEM_CANARY_COUNT  4           /* Ubicaciones de canary */
+#define HWVAL_MEM_CANARY_MAGIC  0xC0DEBABE  /* Valor mágico base */
+
+struct hwval_mem_canary {
+    uint32_t *address;      /* Ubicación del canary */
+    uint32_t expected;      /* Valor esperado */
+    uint8_t  region;        /* RAM/FLASH/etc */
+    uint8_t  violated;      /* ¿Corrompido? */
+};
+
+/* Registrar canary en ubicación crítica */
+int hwval_register_canary(uint32_t *address, uint8_t region) {
+    canaries[idx].address = address;
+    canaries[idx].expected = HWVAL_MEM_CANARY_MAGIC ^ (uint32_t)address;
+    *address = canaries[idx].expected;  /* Escribir canary */
+    return idx;
+}
+
+/* Verificar integridad */
+uint8_t hwval_check_canaries(void) {
+    for (int i = 0; i < canary_count; i++) {
+        if (*canaries[i].address != canaries[i].expected) {
+            /* ¡Corrupción detectada! */
+            hwval_record_violation(HWVAL_VIOLATION_MEM_CANARY, SEVERITY_FATAL);
+        }
+    }
+}
+```
+
+### 12.6 Integridad de Flash (CRC)
+
+```c
+struct hwval_flash_block {
+    uint32_t start_addr;    /* Dirección de inicio */
+    uint32_t size;          /* Tamaño del bloque */
+    uint32_t crc;           /* CRC esperado */
+    uint32_t last_check;    /* Última verificación */
+};
+
+/* Registrar bloque de código crítico */
+int hwval_register_flash_block(uint32_t start, uint32_t size) {
+    flash_blocks[idx].start_addr = start;
+    flash_blocks[idx].size = size;
+    flash_blocks[idx].crc = calculate_crc32(start, size);
+}
+
+/* Si el CRC no coincide → firmware alterado */
+```
+
+### 12.7 Tipos de Violación
+
+| Código | Tipo | Severidad | Descripción |
+|--------|------|-----------|-------------|
+| 0x01 | TEMP_RANGE | CRITICAL | Temperatura fuera de límites |
+| 0x02 | TEMP_SPIKE | WARNING | Cambio brusco de temperatura |
+| 0x03 | VOLTAGE_RANGE | CRITICAL | Voltaje fuera de límites |
+| 0x04 | VOLTAGE_SPIKE | CRITICAL | Glitch de voltaje (fault injection) |
+| 0x05 | CLOCK_DRIFT | WARNING | Drift de reloj excesivo |
+| 0x06 | CLOCK_GLITCH | CRITICAL | Glitching de reloj detectado |
+| 0x07 | MEM_CANARY | FATAL | Canary de memoria corrompido |
+| 0x08 | FLASH_CRC | FATAL | CRC de flash no coincide |
+| 0x0A | SENSOR_STUCK | WARNING | Sensor no cambia (¿desconectado?) |
+| 0x0C | BROWNOUT | WARNING | Voltaje bajo detectado |
+
+### 12.8 Trust Score
+
+Cada nodo calcula un "Trust Score" de hardware (0-255):
+
+```c
+uint8_t hwval_trust_score(void) {
+    if (state == HWVAL_STATE_COMPROMISED) return 0;
+
+    uint8_t score = 255 - anomaly_score;
+
+    /* Penalizar por violaciones recientes */
+    score -= total_violations * 10;
+
+    return score;
+}
+```
+
+### 12.9 Integración con Otros Sistemas
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Flujo de Violación Hardware                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Violación Detectada                                            │
+│        │                                                         │
+│        ▼                                                         │
+│  ┌─────────────────┐                                            │
+│  │ Registrar en    │                                            │
+│  │ Black Box       │                                            │
+│  └────────┬────────┘                                            │
+│           │                                                      │
+│           ▼                                                      │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                 RESPUESTA COORDINADA                     │    │
+│  ├─────────────────────────────────────────────────────────┤    │
+│  │                                                          │    │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │    │
+│  │  │     AIS      │  │  STIGMERGIA  │  │   BROADCAST  │   │    │
+│  │  │ Correlación  │  │ Emit DANGER  │  │ PHEROMONE_   │   │    │
+│  │  │ con anomalías│  │ pheromone    │  │ HWVAL_ALERT  │   │    │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘   │    │
+│  │                                                          │    │
+│  │  Si FATAL → Apoptosis inmediata                         │    │
+│  │                                                          │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 12.10 API de Hardware Validation
+
+```c
+/* Inicialización */
+int hwval_init(void);
+
+/* Tick periódico (llamar cada 100ms) */
+void hwval_tick(void);
+
+/* Forzar verificación completa */
+uint8_t hwval_check_now(void);
+
+/* ¿Hardware confiable? */
+bool hwval_is_trusted(void);
+
+/* Registrar canary de memoria */
+int hwval_register_canary(uint32_t *address, uint8_t region);
+
+/* Registrar bloque de flash para CRC */
+int hwval_register_flash_block(uint32_t start, uint32_t size);
+
+/* Obtener trust score */
+uint8_t hwval_trust_score(void);
+
+/* Debug */
+void hwval_print_status(void);
+```
+
+### 12.11 Ventajas de Hardware Validation
+
+| Característica | Beneficio |
+|----------------|-----------|
+| Detección física | Detecta ataques que el software no puede ver |
+| Baseline adaptativo | Aprende qué es "normal" para este hardware |
+| Integración AIS | Correlaciona eventos HW con anomalías de red |
+| Trust Score | Otros nodos pueden evaluar confiabilidad |
+| Respuesta rápida | Violaciones fatales → apoptosis inmediata |
+
+> "El hardware no puede mentir - pero puede ser torturado para dar falsas confesiones.
+> Nuestro trabajo es detectar la tortura."
+
+---
+
+## 13. Handshake de Conexión Reliable
+
+### 13.1 Two-Way Handshake (simplificado)
 
 A diferencia del 3-way handshake de TCP, usamos 2-way para conexiones efímeras (para más detalles sobre selección de rutas ver sección 7.6):
 
@@ -910,7 +1587,7 @@ A diferencia del 3-way handshake de TCP, usamos 2-way para conexiones efímeras 
       ... conexión establecida ...
 ```
 
-### 10.2 Código de Handshake
+### 13.2 Código de Handshake
 
 ```c
 int nert_connect(uint16_t peer_id) {
@@ -959,9 +1636,9 @@ void nert_handle_syn(struct nert_packet *pkt) {
 
 ---
 
-## 11. API de Usuario
+## 14. API de Usuario
 
-### 11.1 Funciones Principales
+### 14.1 Funciones Principales
 
 ```c
 /*
@@ -1019,7 +1696,7 @@ typedef void (*nert_receive_callback)(uint16_t sender_id,
 void nert_set_receive_callback(nert_receive_callback cb);
 ```
 
-### 11.2 Ejemplo de Uso
+### 14.2 Ejemplo de Uso
 
 ```c
 /* En kernel_main() */
@@ -1068,7 +1745,7 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 
 ---
 
-## 12. Comparación con Protocolos Existentes
+## 15. Comparación con Protocolos Existentes
 
 | Característica | TCP | UDP | QUIC | **NERT** |
 |---------------|-----|-----|------|----------|
@@ -1084,9 +1761,9 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 
 ---
 
-## 13. Consideraciones de Seguridad
+## 16. Consideraciones de Seguridad
 
-### 13.1 Modelo de Amenazas
+### 16.1 Modelo de Amenazas
 
 | Amenaza | Mitigación |
 |---------|------------|
@@ -1098,7 +1775,7 @@ void handle_pheromone(uint16_t sender_id, uint8_t type,
 | Sybil/Eclipse attacks | Reputación Hebbiana: nodos maliciosos penalizados (v0.5) |
 | Man-in-the-middle | Requiere conocer SWARM_MASTER_KEY |
 
-### 13.2 Rotación de Claves con Ventana de Gracia
+### 16.2 Rotación de Claves con Ventana de Gracia
 
 **Problema**: Sin sincronización de tiempo, nodos con relojes ligeramente desincronizados
 podrían rechazar paquetes válidos justo en el cambio de época.
@@ -1162,7 +1839,7 @@ uint8_t get_valid_key_mask(void) {
 - Sin sincronización de tiempo requerida
 - Overhead mínimo: 64 bytes extra de RAM para claves adicionales
 
-### 13.3 Protección Anti-Replay
+### 16.3 Protección Anti-Replay
 
 ```c
 /* Ventana anti-replay de 64 paquetes */
@@ -1203,9 +1880,9 @@ int nert_check_replay(struct replay_protection *rp, uint16_t seq) {
 
 ---
 
-## 14. Métricas y Debugging
+## 17. Métricas y Debugging
 
-### 14.1 Contadores de Estadísticas
+### 17.1 Contadores de Estadísticas
 
 ```c
 struct nert_stats {
@@ -1236,7 +1913,7 @@ struct nert_stats {
 extern struct nert_stats nert_stats;
 ```
 
-### 14.2 Debug Output
+### 17.2 Debug Output
 
 ```c
 #ifdef NERT_DEBUG
@@ -1256,9 +1933,9 @@ void nert_debug_packet(const char *prefix, struct nert_packet *pkt) {
 
 ---
 
-## 15. Implementación por Plataforma
+## 18. Implementación por Plataforma
 
-### 15.1 x86 (QEMU e1000)
+### 18.1 x86 (QEMU e1000)
 
 ```c
 /* Usa infraestructura existente */
@@ -1273,7 +1950,7 @@ int nert_hal_send(const void *data, uint16_t len) {
 }
 ```
 
-### 15.2 ARM Cortex-M3 (Stellaris)
+### 18.2 ARM Cortex-M3 (Stellaris)
 
 ```c
 /* Formato compacto para MCU */
@@ -1291,7 +1968,7 @@ struct nert_header_compact {
 /* + 4 bytes auth tag = 16 bytes overhead total */
 ```
 
-### 15.3 ESP32
+### 18.3 ESP32
 
 ```c
 /* WiFi broadcast o ESP-NOW */
@@ -1306,16 +1983,16 @@ int nert_hal_send(const void *data, uint16_t len) {
 
 ---
 
-## 16. Migración desde Protocolo Actual
+## 19. Migración desde Protocolo Actual
 
-### 16.1 Compatibilidad
+### 19.1 Compatibilidad
 
 NERT es compatible con el protocolo pheromone existente:
 - Mismo puerto multicast (230.0.0.1:1234)
 - Identificable por magic byte diferente (0x4E vs 0x4E414E4F)
 - Fallback a protocolo legacy si NERT no disponible
 
-### 16.2 Detección de Versión
+### 19.2 Detección de Versión
 
 ```c
 int nert_detect_protocol(const uint8_t *data, uint16_t len) {
@@ -1331,9 +2008,9 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 
 ---
 
-## 17. Resumen de Recursos
+## 20. Resumen de Recursos
 
-### 17.1 Uso de RAM
+### 20.1 Uso de RAM
 
 | Componente | Tamaño | Notas |
 |------------|--------|-------|
@@ -1346,7 +2023,7 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 | **Total** | **~1.8KB** | Sin FEC buffers |
 | + FEC Buffers | +768B | Solo para CRITICAL |
 
-### 17.2 Uso de CPU
+### 20.2 Uso de CPU
 
 | Operación | Ciclos (~ARM Cortex-M3) |
 |-----------|-------------------------|
@@ -1438,12 +2115,15 @@ int nert_detect_protocol(const uint8_t *data, uint16_t len) {
 
 ---
 
-**Versión**: 1.2 (Stigmergia + Black Box)
+**Versión**: 1.5 (Validación de Hardware - "El Centinela del Silicio")
 **Autor**: Claude Code / NanOS Team
-**Fecha**: 2026-01-18
+**Fecha**: 2026-01-20
 **Licencia**: MIT
 
 ### Changelog
+- **v1.5**: Agregada sección 12 (Validación de Hardware "El Centinela del Silicio" - detección de manipulación física y fault injection)
+- **v1.4**: Agregada sección 11 (Polimorfismo de Código "El Camaleón" - ASLR, Stack Canaries, Binary Signatures para diversidad de nodos)
+- **v1.3**: Agregada sección 10 (Sistema Inmune Artificial - Negative Selection para detección 0-day)
 - **v1.2**: Agregadas secciones 8 (Stigmergia: Feromonas Digitales) y 9 (Black Box Distribuida: "El Último Aliento")
 - **v1.1**: Agregado sección 7 (Enrutamiento Hebbiano), actualizado secciones de seguridad con protección contra ataques Sybil/Eclipse
 - **v1.0**: Versión inicial del protocolo NERT
