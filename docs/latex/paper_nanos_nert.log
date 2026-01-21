@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.12)  18 JAN 2026 23:01
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2025) (preloaded format=pdflatex 2025.3.12)  21 JAN 2026 16:18
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1058,90 +1058,92 @@ Underfull \hbox (badness 10000) in paragraph at lines 74--75
 
 
 
+Underfull \hbox (badness 2020) in paragraph at lines 84--85
+[]\OT1/cmr/bx/n/10 Genetic Tun-ing (v0.7)\OT1/cmr/m/n/10 : Evo-lu-tion-ary auto
+-
+ []
+
+
+LaTeX Warning: `h' float specifier changed to `ht'.
+
+
 
 [1{c:/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map}
 
 
 ]
-Overfull \hbox (30.29964pt too wide) detected at line 141
+Overfull \hbox (30.29964pt too wide) detected at line 147
 [][][][] \OT1/cmr/m/n/10 = [] + \OML/cmm/m/it/10 s[]  \OT1/cmr/m/n/10 2[]
  []
 
 
-Overfull \hbox (3.88048pt too wide) detected at line 163
+
+
+Overfull \hbox (3.88048pt too wide) detected at line 169
 [][][]\OML/cmm/m/it/10 K[]\OT1/cmr/m/n/10 (\OML/cmm/m/it/10 e\OT1/cmr/m/n/10 ) 
 = [](\OML/cmm/m/it/10 K[]; \OT1/cmr/m/n/10 0[]\OML/cmm/m/it/10 ; K[]\OMS/cmsy/m
 /n/10 k\OML/cmm/m/it/10 e\OMS/cmsy/m/n/10 k[]\OT1/cmr/m/n/10 )[0 : 255]
  []
 
 
-Underfull \hbox (badness 6592) in paragraph at lines 167--168
+Underfull \hbox (badness 6592) in paragraph at lines 173--174
 [][]\OT1/cmr/bx/n/10 Property 1 \OT1/cmr/m/n/10 (For-ward Se-crecy)\OT1/cmr/bx/
 n/10 . []\OT1/cmr/m/it/10 Com-pro-mise of
  []
 
 
-
-
-Overfull \hbox (12.13998pt too wide) in paragraph at lines 248--258
- [][] 
- []
-
-
 LaTeX Warning: `h' float specifier changed to `ht'.
 
 
-Underfull \hbox (badness 2042) in paragraph at lines 261--261
-[]\OT1/cmr/bx/n/12 RTT Es-ti-ma-tion (Ja-cob-son Al-go-
+Overfull \hbox (12.13998pt too wide) in paragraph at lines 254--264
+ [][] 
  []
 
 
 
 [2]
+Underfull \hbox (badness 2042) in paragraph at lines 267--267
+[]\OT1/cmr/bx/n/12 RTT Es-ti-ma-tion (Ja-cob-son Al-go-
+ []
+
 Package hyperref Info: bookmark level for unknown algorithm defaults to 0 on in
-put line 276.
+put line 282.
 
 
 
-Overfull \hbox (39.13536pt too wide) in paragraph at lines 354--355
+Overfull \hbox (39.13536pt too wide) in paragraph at lines 360--361
  [][] 
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 365--366
+Underfull \hbox (badness 10000) in paragraph at lines 371--372
 [][]\OT1/cmr/bx/n/10 Definition 8 \OT1/cmr/m/n/10 (Role Set)\OT1/cmr/bx/n/10 . 
 []$\OMS/cmsy/m/n/10 R \OT1/cmr/m/n/10 =
  []
 
 
-LaTeX Warning: `h' float specifier changed to `ht'.
-
-
 
 [3{c:/texlive/2025/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc}]
-Underfull \hbox (badness 4899) in paragraph at lines 436--436
+Underfull \hbox (badness 4899) in paragraph at lines 442--442
 []\OT1/cmr/bx/n/12 Stigmergia: Dig-i-tal Pheromones
  []
-
-
-LaTeX Warning: `h' float specifier changed to `ht'.
 
 
 
 
 
 [4]
-Underfull \hbox (badness 10000) in paragraph at lines 609--610
+Underfull \hbox (badness 10000) in paragraph at lines 615--616
 []\OT1/cmr/m/it/10 Death rea-son code (NAT-U-RAL,
  []
 
 
-Underfull \hbox (badness 10000) in paragraph at lines 609--610
+Underfull \hbox (badness 10000) in paragraph at lines 615--616
 \OT1/cmr/m/it/10 HEAP[]EXHAUSTED, COR-RUP-TION, AT-
  []
 
 
-Underfull \hbox (badness 6204) in paragraph at lines 609--610
+Underfull \hbox (badness 6204) in paragraph at lines 615--616
 \OT1/cmr/m/it/10 TACK[]DETECTED, QUEEN[]ORDER, ISO-LA-
  []
 
@@ -1151,33 +1153,109 @@ File: lstlang1.sty 2024/09/23 1.10c listings language file
 (c:/texlive/2025/texmf-dist/tex/latex/listings/lstmisc.sty
 File: lstmisc.sty 2024/09/23 1.10c (Carsten Heinz)
 )
+
 LaTeX Font Info:    Font shape `OT1/cmtt/bx/n' in size <5> not available
-(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 629.
+(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 635.
+
+Underfull \hbox (badness 4819) in paragraph at lines 640--640
+[]\OT1/cmr/bx/n/12 Artificial Im-mune Sys-tem (AIS)
+ []
 
 
-Package hyperref Info: bookmark level for unknown lstlisting defaults to 0 on i
-nput line 638.
+Overfull \hbox (51.06549pt too wide) in paragraph at lines 687--688
+ [][] 
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 695--696
+[]\OT1/cmr/bx/n/10 Black Box\OT1/cmr/m/n/10 : Records
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 700--700
+[]\OT1/cmr/bx/n/12 Code Poly-mor-phism: ``El Ca-
+ []
+
 
 
 [5]
-Underfull \hbox (badness 3158) in paragraph at lines 746--747
-[]\OT1/cmr/bx/n/10 Lightweight Crypto\OT1/cmr/m/n/10 : PRESENT [[]4[]] and SI-
+Overfull \hbox (22.21397pt too wide) detected at line 719
+[] \OT1/cmr/m/n/10 = \OML/cmm/m/it/10 H\OT1/cmr/m/n/10 ([]\OMS/cmsy/m/n/10 k[]k
+[]k[]\OT1/cmr/m/n/10 )
+ []
+
+
+Overfull \hbox (43.99934pt too wide) in paragraph at lines 741--742
+ [][] 
+ []
+
+
+Underfull \hbox (badness 1590) in paragraph at lines 746--747
+[]\OT1/cmr/bx/n/10 Diversity Score\OT1/cmr/m/n/10 : Quan-ti-fies unique-ness ($
+0$--$255$,
+ []
+
+
+Overfull \hbox (101.48714pt too wide) detected at line 749
+[] \OT1/cmr/m/n/10 = []([]) \OMS/cmsy/m/n/10 ^^A \OT1/cmr/m/n/10 8 + []([]) \OM
+S/cmsy/m/n/10 ^^A \OT1/cmr/m/n/10 8 + [] []([][\OML/cmm/m/it/10 i\OT1/cmr/m/n/1
+0 ])
  []
 
 
 
 
-Underfull \hbox (badness 6173) in paragraph at lines 784--785
+
+[6]
+Overfull \hbox (218.15034pt too wide) detected at line 832
+[][][][] [] [] [] [] [] [] [] []
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 867--868
+[]\OT1/cmr/m/n/10 Modulation: FSK (1kHz/2kHz au-di-ble or
+ []
+
+
+
+Package hyperref Info: bookmark level for unknown lstlisting defaults to 0 on i
+nput line 889.
+
+
+[7]
+
+
+Underfull \hbox (badness 3158) in paragraph at lines 997--998
+[]\OT1/cmr/bx/n/10 Lightweight Crypto\OT1/cmr/m/n/10 : PRESENT [[]4[]] and SI-
+ []
+
+
+Underfull \hbox (badness 2020) in paragraph at lines 1017--1018
+[]\OT1/cmr/bx/n/10 Genetic Tun-ing (v0.7)\OT1/cmr/m/n/10 : Evo-lu-tion-ary auto
+-
+ []
+
+
+
+[8]
+Underfull \hbox (badness 1127) in paragraph at lines 1024--1025
+\OT1/cmr/m/n/10 ``nor-mal'' traf-fic looks like and flags any-thing that
+ []
+
+
+
+
+Underfull \hbox (badness 6173) in paragraph at lines 1049--1050
 []\OT1/cmr/m/n/10 A. Bog-danov et al., ``PRESENT: An ultra-
  []
 
 
 
-[6]
+[9]
 
 
 
-[7
+[10
 
 ] (./paper_nanos_nert.aux)
  ***********
@@ -1185,43 +1263,45 @@ LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
  ***********
 Package rerunfilecheck Info: File `paper_nanos_nert.out' has not changed.
-(rerunfilecheck)             Checksum: 25D1CE0A6FF23B8A8B944BFC49028D7D;6135.
+(rerunfilecheck)             Checksum: BB536BB8BDA5A8DBC751B997E4AB9FC7;7982.
  ) 
 Here is how much of TeX's memory you used:
- 39208 strings out of 473190
- 891507 string characters out of 5719979
- 1758733 words of memory out of 5000000
- 61664 multiletter control sequences out of 15000+600000
- 571219 words of font info for 84 fonts, out of 8000000 for 9000
+ 39363 strings out of 473190
+ 894044 string characters out of 5719979
+ 1734524 words of memory out of 5000000
+ 61779 multiletter control sequences out of 15000+600000
+ 571746 words of font info for 86 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 84i,11n,87p,762b,1250s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 84i,11n,87p,1164b,2027s stack positions out of 10000i,1000n,20000p,200000b,200000s
 <c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb><c:/tex
 live/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb><c:/texlive/2025
 /texmf-dist/fonts/type1/public/amsfonts/cm/cmbx5.pfb><c:/texlive/2025/texmf-dis
 t/fonts/type1/public/amsfonts/cm/cmbx9.pfb><c:/texlive/2025/texmf-dist/fonts/ty
-pe1/public/amsfonts/cm/cmex10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/publi
-c/amsfonts/cm/cmitt10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfon
-ts/cm/cmmi10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmm
-i5.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb><c:
-/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi9.pfb><c:/texlive/2
-025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb><c:/texlive/2025/texmf-
-dist/fonts/type1/public/amsfonts/cm/cmr12.pfb><c:/texlive/2025/texmf-dist/fonts
-/type1/public/amsfonts/cm/cmr5.pfb><c:/texlive/2025/texmf-dist/fonts/type1/publ
-ic/amsfonts/cm/cmr7.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts
-/cm/cmr8.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pf
-b><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb><c:/tex
-live/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb><c:/texlive/2025/
-texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb><c:/texlive/2025/texmf-dist
-/fonts/type1/public/amsfonts/cm/cmsy9.pfb><c:/texlive/2025/texmf-dist/fonts/typ
-e1/public/amsfonts/cm/cmti10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public
-/amsfonts/cm/cmti7.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/
-cm/cmtt8.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt9.p
-fb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/symbols/msam10.pfb><
-c:/texlive/2025/texmf-dist/fonts/type1/public/cm-super/sfrm1000.pfb>
-Output written on paper_nanos_nert.pdf (7 pages, 385884 bytes).
+pe1/public/amsfonts/cm/cmbxti10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/pub
+lic/amsfonts/cm/cmex10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfo
+nts/cm/cmitt10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/c
+mmi10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb>
+<c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb><c:/texliv
+e/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi9.pfb><c:/texlive/2025/tex
+mf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb><c:/texlive/2025/texmf-dist/fo
+nts/type1/public/amsfonts/cm/cmr12.pfb><c:/texlive/2025/texmf-dist/fonts/type1/
+public/amsfonts/cm/cmr5.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsf
+onts/cm/cmr7.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr
+8.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb><c:/t
+exlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb><c:/texlive/20
+25/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb><c:/texlive/2025/texmf-d
+ist/fonts/type1/public/amsfonts/cm/cmsy7.pfb><c:/texlive/2025/texmf-dist/fonts/
+type1/public/amsfonts/cm/cmsy9.pfb><c:/texlive/2025/texmf-dist/fonts/type1/publ
+ic/amsfonts/cm/cmti10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfon
+ts/cm/cmti7.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt
+10.pfb><c:/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt8.pfb><c:
+/texlive/2025/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt9.pfb><c:/texlive/2
+025/texmf-dist/fonts/type1/public/amsfonts/symbols/msam10.pfb><c:/texlive/2025/
+texmf-dist/fonts/type1/public/cm-super/sfrm1000.pfb>
+Output written on paper_nanos_nert.pdf (10 pages, 435063 bytes).
 PDF statistics:
- 516 PDF objects out of 1000 (max. 8388607)
- 449 compressed objects within 5 object streams
- 189 named destinations out of 1000 (max. 500000)
- 313 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 602 PDF objects out of 1000 (max. 8388607)
+ 527 compressed objects within 6 object streams
+ 228 named destinations out of 1000 (max. 500000)
+ 361 words of extra memory for PDF output out of 10000 (max. 10000000)
 

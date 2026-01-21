@@ -81,6 +81,9 @@ This paper presents:
     \item \textbf{Artificial Immune System (v0.6)}: Negative Selection algorithm for 0-day anomaly detection
     \item \textbf{Code Polymorphism (v0.6)}: Binary diversity via ASLR, stack canaries, and unique signatures
     \item \textbf{Hardware Validation (v0.6)}: Physical layer security through sensor monitoring and fault detection
+    \item \textbf{Genetic Tuning (v0.7)}: Evolutionary auto-optimization of NERT parameters via genetic algorithms
+    \item \textbf{Judas Nodes (v0.7)}: Active honeypots for attacker payload capture and threat intelligence
+    \item \textbf{Covert Channels (v0.7)}: Physical side-channels (optical/acoustic) for air-gap communication
 \end{enumerate}
 
 \subsection{System Requirements}
@@ -781,6 +784,104 @@ If $\text{Canary}_i^{\text{current}} \neq \text{Canary}_i^{\text{expected}}$, me
 \end{itemize}
 An attacker must defeat all layers to compromise a node.
 
+\subsection{Genetic Tuning: Evolutionary Parameter Optimization (v0.7)}
+
+NanOS v0.7 introduces \textbf{Genetic Tuning}, enabling the Queen to automatically
+optimize NERT protocol parameters using genetic algorithms. The system maintains
+a population of \textbf{genomes}---32-byte structures encoding timing, gossip, and
+security parameters---and distributes them to sub-swarms for evaluation.
+
+\begin{definition}[Genome Structure]
+A genome $G$ encodes $n=15$ parameters as genes:
+\begin{equation}
+G = \{g_1, g_2, \ldots, g_{15}\} \text{ where } g_i \in [L_i, U_i]
+\end{equation}
+with bounded ranges ensuring valid configurations.
+\end{definition}
+
+\textbf{Fitness Function}: The fitness of each genome combines five metrics:
+\begin{equation}
+F(G) = 0.30 \cdot T + 0.20 \cdot L + 0.25 \cdot R + 0.15 \cdot S + 0.10 \cdot V
+\end{equation}
+where $T$ = throughput, $L$ = inverse latency, $R$ = reliability, $S$ = security (inverse violations), $V$ = survival (uptime + neighbors).
+
+\textbf{Genetic Operators}:
+\begin{itemize}
+    \item \textbf{Tournament Selection}: $k=3$ random genomes compete, highest fitness advances
+    \item \textbf{Two-Point Crossover}: Parents exchange gene segments between two random points
+    \item \textbf{Bounded Mutation}: 5\% probability per gene, constrained to valid ranges
+    \item \textbf{Elitism}: Top 10\% genomes preserved unchanged across generations
+\end{itemize}
+
+\textbf{Protocol Messages}:
+\begin{itemize}
+    \item \texttt{CONFIG\_UPDATE (0x14)}: Queen distributes genome to sub-swarm (authenticated)
+    \item \texttt{TELEMETRY\_REPORT (0x15)}: Workers report metrics to Queen (periodic)
+\end{itemize}
+
+\subsection{Judas Nodes: Active Honeypots (v0.7)}
+
+\textbf{Judas Nodes} are Workers that, upon detecting intrusion, feign vulnerability
+to capture attacker payloads before self-destructing. This transforms compromised
+nodes into threat intelligence sources.
+
+\begin{definition}[Judas State Machine]
+A Judas node transitions through states:
+\begin{equation}
+\text{DORMANT} \xrightarrow{\text{trigger}} \text{SUSPICIOUS} \xrightarrow{\text{threshold}} \text{ENGAGING} \xrightarrow{\text{payload}} \text{CAPTURING} \xrightarrow{\text{complete}} \text{DETONATING}
+\end{equation}
+\end{definition}
+
+\textbf{Activation Triggers}: Bad MACs ($\geq 3$), replay attempts ($\geq 2$), anomalous probes ($\geq 5$).
+
+\textbf{Protocol Messages}:
+\begin{itemize}
+    \item \texttt{JUDAS\_ENGAGE (0x16)}: Notifies Queen of attacker engagement
+    \item \texttt{JUDAS\_CAPTURE (0x17)}: Transmits captured attacker payload
+    \item \texttt{JUDAS\_FORENSICS (0x18)}: Complete BlackBox before apoptosis
+\end{itemize}
+
+\begin{theorem}[Forensic Survival]
+If a Judas node captures payload $P$ and transmits to $k$ trusted neighbors before detonation,
+evidence survives with probability $1 - p^k$ where $p$ is single-node compromise probability.
+With $k=3$ and $p=0.1$, survival probability exceeds $99.9\%$.
+\end{theorem}
+
+\subsection{Covert Channels: Physical Side-Channels (v0.7)}
+
+For air-gapped environments, NanOS v0.7 implements \textbf{Covert Channels} using
+physical side-channels: optical (LED/light sensor) and acoustic (buzzer/microphone).
+
+\textbf{Optical Channel}:
+\begin{itemize}
+    \item Transmitter: LED controlled via PWM
+    \item Receiver: Photoresistor/photodiode on ADC
+    \item Modulation: Manchester encoding (self-clocking)
+    \item Data rate: 10--100 bps
+\end{itemize}
+
+\textbf{Acoustic Channel}:
+\begin{itemize}
+    \item Transmitter: Piezoelectric buzzer with PWM
+    \item Receiver: Analog microphone or I2S
+    \item Modulation: FSK (1kHz/2kHz audible or 18kHz/20kHz ultrasonic)
+    \item Data rate: 50--200 bps
+\end{itemize}
+
+\begin{definition}[Manchester Encoding]
+Each bit $b$ is encoded as a transition at mid-period:
+\begin{equation}
+\text{encode}(b) = \begin{cases}
+\text{HIGH} \to \text{LOW} & \text{if } b = 0 \\
+\text{LOW} \to \text{HIGH} & \text{if } b = 1
+\end{cases}
+\end{equation}
+Transitions provide clock recovery without separate synchronization.
+\end{definition}
+
+\textbf{Security}: Covert channel data is encrypted with the same ChaCha8 session key
+and includes sequence numbers for anti-replay protection. Maximum payload is 16 bytes per frame.
+
 \section{Engineering Implementation}
 
 \subsection{Memory Layout (ARM Cortex-M3)}
@@ -913,6 +1014,9 @@ NanOS with NERT demonstrates that secure, reliable swarm communication is achiev
     \item \textbf{Artificial Immune System (v0.6)}: Negative Selection for 0-day anomaly detection without signatures
     \item \textbf{Code Polymorphism (v0.6)}: ``El Camaleón'' --- binary diversity preventing exploit reuse across nodes
     \item \textbf{Hardware Validation (v0.6)}: ``El Centinela del Silicio'' --- physical layer security through sensor monitoring and fault detection
+    \item \textbf{Genetic Tuning (v0.7)}: Evolutionary auto-optimization of NERT parameters using genetic algorithms with fitness-based selection
+    \item \textbf{Judas Nodes (v0.7)}: Active honeypots that capture attacker payloads before self-destructing, generating threat intelligence
+    \item \textbf{Covert Channels (v0.7)}: Physical side-channels (optical/acoustic) enabling air-gap communication via LED and buzzer modulation
 \end{enumerate}
 
 Version 0.5 introduces a ``distributed brain'' where the swarm learns from experience: successful communications strengthen synaptic weights while failures cause severe depression, enabling automatic route optimization without central coordination. The stigmergia system adds spatial memory through evaporating pheromones, while the black box ensures forensic evidence survives even when nodes are compromised and terminated.
@@ -922,6 +1026,8 @@ Version 0.6 adds an \textbf{Artificial Immune System} (AIS) based on the Negativ
 Version 0.6 also introduces \textbf{Code Polymorphism} (``El Camaleón''), ensuring each node has a unique binary fingerprint. Through ASLR (stack and heap randomization), stack canaries, 128-bit binary signatures, and timing jitter, exploits developed for one node cannot be replayed against others. With $2^{14}$ ASLR combinations per node, compromising a 1000-node swarm requires developing 1000 unique exploits---fundamentally changing the economics of attack.
 
 Finally, v0.6 introduces \textbf{Hardware Validation} (``El Centinela del Silicio''), providing physical layer security through continuous monitoring of temperature, voltage, and clock frequency. Memory canaries detect unauthorized modifications, while flash CRC verification catches firmware tampering. The system computes a hardware ``Trust Score'' that other security layers can use to assess node reliability. This completes a defense-in-depth architecture where attackers must simultaneously defeat network-level (AIS), binary-level (Polymorphism), and physical-level (Hardware Validation) protections.
+
+Version 0.7 introduces three evolutionary capabilities. \textbf{Genetic Tuning} enables the Queen to automatically optimize NERT parameters using genetic algorithms---tournament selection, two-point crossover, and bounded mutation evolve a population of genomes distributed to sub-swarms for A/B testing. Fitness evaluation combines throughput (30\%), latency (20\%), reliability (25\%), security (15\%), and survival (10\%) metrics. \textbf{Judas Nodes} transform compromised nodes into threat intelligence sources: upon detecting intrusion, they feign vulnerability to capture attacker payloads before detonating, transmitting forensic evidence via JUDAS\_FORENSICS pheromones. This turns every attempted compromise into intelligence gathering. \textbf{Covert Channels} enable communication in air-gapped environments through physical side-channels---optical (LED/light sensor with Manchester encoding at 10-100 bps) and acoustic (buzzer/microphone with FSK modulation at 50-200 bps). All covert traffic is encrypted with the same ChaCha8 session key, maintaining end-to-end security even across physical media.
 
 Future work includes formal verification of the protocol state machine and evaluation on physical swarm hardware.
 

@@ -59,6 +59,15 @@ typedef _Bool              bool;
 #define PHEROMONE_JOB_RESULT 0x53   /* Final aggregated result */
 #define PHEROMONE_JOB_STATUS 0x54   /* Job status query/response */
 
+/* Genetic Tuning pheromones (v0.7) */
+#define PHEROMONE_CONFIG_UPDATE  0x14  /* Genetic config from Queen */
+#define PHEROMONE_TELEMETRY_REPORT 0x15 /* Fitness telemetry to Queen */
+
+/* Judas Node pheromones (v0.7) */
+#define PHEROMONE_JUDAS_ENGAGE   0x16  /* Judas node engaged attacker */
+#define PHEROMONE_JUDAS_CAPTURE  0x17  /* Judas payload capture */
+#define PHEROMONE_JUDAS_FORENSICS 0x18 /* Judas forensics before death */
+
 #define PHEROMONE_REBIRTH   0xFE    /* Cell death notification */
 #define PHEROMONE_DIE       0xFF    /* Kill command */
 

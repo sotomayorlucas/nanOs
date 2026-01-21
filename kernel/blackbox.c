@@ -70,7 +70,7 @@ static int pack_last_will(uint8_t* payload, uint8_t death_reason) {
     payload[offset++] = (uint8_t)(ticks / 360000);  /* Approx hours */
 
     /* Security statistics (from NERT if available) */
-    uint32_t bad_mac = 0, replay = 0, invalid = 0;
+    uint32_t bad_mac = 0, replay = 0;
     /* Note: These would come from nert_security_get_stats in full impl */
     payload[offset++] = bad_mac & 0xFF;
     payload[offset++] = (bad_mac >> 8) & 0xFF;
@@ -178,14 +178,15 @@ void blackbox_emit_last_will(uint8_t death_reason) {
     pkt.magic = NANOS_MAGIC;
     pkt.type = PHEROMONE_LAST_WILL;
     pkt.node_id = g_state.node_id;
-    pkt.seq = g_state.seq_num++;
+    pkt.seq = g_state.seq_counter++;
     pkt.ttl = 2;  /* Limited propagation - only trusted neighbors */
     pkt.hop_count = 0;
     pkt.distance = g_state.distance_to_queen;
-    pkt.reserved = PKT_MAKE_ROLE(g_state.role);
+    pkt.flags = 0;
+    PKT_SET_ROLE(&pkt, g_state.role);
 
-    /* Pack our testament */
-    pkt.payload_len = pack_last_will(pkt.payload, death_reason);
+    /* Pack our testament (payload is fixed 32 bytes) */
+    (void)pack_last_will(pkt.payload, death_reason);
 
     /* Send to multiple trusted neighbors */
     uint32_t sent_to[3] = {0, 0, 0};
@@ -220,13 +221,14 @@ void blackbox_emit_last_will(uint8_t death_reason) {
 }
 
 void blackbox_process_last_will(struct nanos_pheromone* pkt) {
-    if (pkt->payload_len < 17) return;
+    /* Payload is fixed 32 bytes, minimum last will needs 17 bytes */
+    const uint8_t payload_size = 32;
 
     uint32_t dead_node_id;
     uint8_t death_reason, uptime_hours, neighbor_count, role, distance;
     uint16_t bad_mac_count;
 
-    unpack_last_will(pkt->payload, pkt->payload_len,
+    unpack_last_will(pkt->payload, payload_size,
                      &dead_node_id, &death_reason, &uptime_hours,
                      &bad_mac_count, &neighbor_count, &role, &distance);
 
@@ -272,7 +274,7 @@ void blackbox_process_last_will(struct nanos_pheromone* pkt) {
 
     for (int i = 0; i < event_count; i++) {
         int base = 17 + (i * 7);
-        if (base + 7 > pkt->payload_len) break;
+        if (base + 7 > payload_size) break;
 
         g_state.blackbox.wills[slot].events[i].tick =
             pkt->payload[base] | (pkt->payload[base + 1] << 8) |
@@ -348,7 +350,7 @@ void blackbox_relay_critical(void) {
             pkt.payload[5] = g_state.blackbox.wills[i].uptime_hours;
             pkt.payload[6] = g_state.blackbox.wills[i].bad_mac_count & 0xFF;
             pkt.payload[7] = (g_state.blackbox.wills[i].bad_mac_count >> 8) & 0xFF;
-            pkt.payload_len = 17;  /* Minimum */
+            /* payload is fixed 32 bytes */
 
             e1000_send(&pkt, sizeof(pkt));
             g_state.blackbox.wills_relayed++;

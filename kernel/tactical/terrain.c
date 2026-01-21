@@ -1267,7 +1267,8 @@ void stigmergia_emit_queen_trail(void) {
  * Process incoming stigmergia pheromone packet
  */
 void terrain_process_stigmergia(struct nanos_pheromone* pkt) {
-    if (pkt->payload_len < 4) return;
+    /* Payload is fixed 32 bytes, we need at least 4 for stigmergia data */
+    (void)pkt;  /* Silence unused warning if checks disabled */
 
     /* Payload format:
      * [0]: x coordinate (stigmergia grid)
@@ -1321,17 +1322,18 @@ void stigmergia_share(void) {
                     pkt.magic = NANOS_MAGIC;
                     pkt.type = PHEROMONE_STIGMERGIA;
                     pkt.node_id = g_state.node_id;
-                    pkt.seq = g_state.seq_num++;
+                    pkt.seq = g_state.seq_counter++;
                     pkt.ttl = 3;  /* Limited propagation */
                     pkt.hop_count = 0;
                     pkt.distance = g_state.distance_to_queen;
-                    pkt.reserved = PKT_MAKE_ROLE(g_state.role);
+                    pkt.flags = 0;
+                    PKT_SET_ROLE(&pkt, g_state.role);
 
                     pkt.payload[0] = x;
                     pkt.payload[1] = y;
                     pkt.payload[2] = t;
                     pkt.payload[3] = val;
-                    pkt.payload_len = 4;
+                    /* payload is fixed 32 bytes */
 
                     e1000_send(&pkt, sizeof(pkt));
                 }

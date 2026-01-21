@@ -87,6 +87,13 @@ static nert_connection_callback_t connection_callback = NULL;
 /* Statistics */
 static struct nert_stats stats;
 
+/* Forward declarations */
+static int build_and_send(uint16_t dest_id, uint8_t pheromone_type,
+                          uint8_t reliability_class, const void *data,
+                          uint8_t len, uint8_t flags);
+static int process_fragment(uint16_t sender_id, uint8_t original_type,
+                            const uint8_t *frag_data, uint8_t frag_len);
+
 /* ============================================================================
  * Smart Padding TX Queue (v0.5)
  * ============================================================================ */
@@ -3026,7 +3033,7 @@ void nert_timer_tick(void) {
              * v0.5 Hebbian Feedback: PUNISHMENT (LTD)
              * Connection timed out - remote node unresponsive.
              */
-            nert_synapse_update((uint16_t)conn->remote_id, false);
+            nert_synapse_update((uint16_t)conn->peer_id, false);
 
             notify_connection_state(conn, NERT_STATE_CLOSED);
             stats.connections_timeout++;
@@ -3046,7 +3053,7 @@ void nert_timer_tick(void) {
                      * Severe punishment ensures the network learns to
                      * route around failing nodes.
                      */
-                    nert_synapse_update((uint16_t)conn->remote_id, false);
+                    nert_synapse_update((uint16_t)conn->peer_id, false);
 
                     /* Connection failed */
                     notify_connection_state(conn, NERT_STATE_CLOSED);

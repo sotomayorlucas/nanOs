@@ -187,7 +187,7 @@
 {\Large\color{nanosgray} Nano Operating System for Disposable Nodes}\\[2cm]
 
 {\LARGE\bfseries Manual Técnico}\\[0.5cm]
-{\large Versión 0.5}\\[2cm]
+{\large Versión 0.7}\\[2cm]
 
 \begin{tikzpicture}
     \draw[nanosprimary, line width=2pt] (0,0) -- (10,0);
@@ -199,9 +199,13 @@
 {\large Arquitectura del Sistema}\\
 {\large Protocolo de Feromonas}\\
 {\large NERT: Ephemeral Reliable Transport}\\
-{\large Enrutamiento Hebbiano (v0.5)}\\
-{\large Stigmergia: Feromonas Digitales (v0.5)}\\
-{\large Black Box Distribuida (v0.5)}\\
+{\large Enrutamiento Hebbiano}\\
+{\large Stigmergia: Feromonas Digitales}\\
+{\large Black Box Distribuida}\\
+{\large Hive Bridge: Integración con micrOS}\\
+{\large Sintonización Genética (v0.7)}\\
+{\large Nodos Judas: Honeypots Activos (v0.7)}\\
+{\large Canales Encubiertos (v0.7)}\\
 {\large Guía de Implementación}\\[2cm]
 
 \vfill
@@ -628,6 +632,14 @@ struct election_state {
 0x80--0x87 & TERRAIN\_* & No & Mapeo de terreno \\
 0xFE & REBIRTH & \textbf{Sí} & Notificación de muerte/renacimiento \\
 0xFF & DIE & \textbf{Sí} & Comando de terminación \\
+\midrule
+\multicolumn{4}{l}{\textit{Extensiones v0.7}} \\
+\midrule
+0x14 & CONFIG\_UPDATE & \textbf{Sí} & Actualización de genoma (Genetic Tuning) \\
+0x15 & TELEMETRY\_REPORT & No & Reporte de telemetría a Queen \\
+0x16 & JUDAS\_ENGAGE & No & Notifica enganche de atacante \\
+0x17 & JUDAS\_CAPTURE & No & Payload de atacante capturado \\
+0x18 & JUDAS\_FORENSICS & No & BlackBox forense antes de apoptosis \\
 \bottomrule
 \end{tabular}
 \caption{Tipos de pheromones y sus características}
@@ -2618,6 +2630,504 @@ Hardware Validation complementa las otras capas de seguridad:
 Un atacante debe superar todas las capas para comprometer un nodo.
 \end{infobox}
 
+%-------------------------------------------------------------------------------
+\chapter{Sintonización Genética (v0.7)}
+%-------------------------------------------------------------------------------
+
+\section{Visión General}
+
+El sistema de \textbf{Sintonización Genética} permite a la Queen (micrOS) optimizar
+automáticamente los parámetros del protocolo NERT utilizando algoritmos genéticos.
+Los Workers reciben configuraciones de genoma y reportan métricas de rendimiento
+para que la Queen evalúe el fitness de cada configuración.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=3cm, minimum height=1.2cm,
+                text centered, font=\small},
+    scale=0.85
+]
+    % Queen
+    \node[box, fill=nanosaccent!30] (queen) at (0,3) {Queen (micrOS)};
+    \node[font=\tiny, below=0.1cm of queen] {Motor Genético};
+
+    % Workers
+    \node[box, fill=nanosprimary!20] (w1) at (-4,0) {Worker A};
+    \node[box, fill=nanosprimary!20] (w2) at (0,0) {Worker B};
+    \node[box, fill=nanosprimary!20] (w3) at (4,0) {Worker C};
+
+    % Arrows down
+    \draw[arrow] (queen) -- node[left, font=\tiny, sloped] {CONFIG\_UPDATE} (w1);
+    \draw[arrow] (queen) -- node[right, font=\tiny] {CONFIG\_UPDATE} (w2);
+    \draw[arrow] (queen) -- node[right, font=\tiny, sloped] {CONFIG\_UPDATE} (w3);
+
+    % Arrows up
+    \draw[arrow, dashed] (w1) to[bend right=20] node[left, font=\tiny] {TELEMETRY} (queen);
+    \draw[arrow, dashed] (w2) -- node[right, font=\tiny] {TELEMETRY} (queen);
+    \draw[arrow, dashed] (w3) to[bend left=20] node[right, font=\tiny] {TELEMETRY} (queen);
+
+\end{tikzpicture}
+\caption{Flujo de Sintonización Genética entre Queen y Workers}
+\label{fig:genetic-flow}
+\end{figure}
+
+\section{Estructura del Genoma}
+
+Cada genoma contiene 32 bytes de parámetros optimizables:
+
+\begin{lstlisting}[caption={Estructura del genoma NERT}]
+struct nert_genome {
+    uint16_t genome_id;              // ID unico
+    uint8_t  generation;             // Generacion
+    uint8_t  version;                // Version estructura
+
+    // Timing Genes
+    uint16_t tick_interval_ms;       // [10-200]
+    uint16_t retry_timeout_ms;       // [50-1000]
+    uint8_t  max_retries;            // [2-15]
+    uint8_t  window_size;            // [1-8]
+
+    // Gossip Genes
+    uint8_t  gossip_prob_base;       // [50-100]
+    uint8_t  gossip_prob_decay;      // [10-60]
+    uint8_t  jitter_min_ms;          // [5-50]
+    uint8_t  jitter_max_ms;          // [50-200]
+
+    // Security Genes
+    uint8_t  rate_bucket_capacity;   // [5-50]
+    uint8_t  reputation_warn;        // [50-90]
+    uint8_t  reputation_ban;         // [10-40]
+
+    uint16_t fitness_score;          // Calculado [0-10000]
+    uint16_t checksum;               // CRC16
+};
+\end{lstlisting}
+
+\section{Recepción de Configuración}
+
+Cuando un Worker recibe un pheromone \texttt{CONFIG\_UPDATE} de la Queen:
+
+\begin{enumerate}
+    \item Verificar HMAC (solo Queen puede enviar configuraciones)
+    \item Validar CRC16 del genoma
+    \item Verificar que todos los parámetros estén en rango
+    \item Aplicar configuración gradualmente (evitar cambios bruscos)
+    \item Registrar evento en BlackBox
+\end{enumerate}
+
+\begin{lstlisting}[caption={Procesamiento de CONFIG\_UPDATE}]
+void genetic_process_config_update(const struct nanos_pheromone *pkt) {
+    struct nert_genome *genome = (struct nert_genome*)pkt->payload;
+
+    // Verificar checksum
+    if (!genetic_verify_checksum(genome)) {
+        blackbox_record_event(EVENT_GENETIC_BAD_CHECKSUM, genome->genome_id);
+        return;
+    }
+
+    // Aplicar configuracion
+    if (genetic_apply_genome(genome) == 0) {
+        g_state.current_genome_id = genome->genome_id;
+        g_state.genome_generation = genome->generation;
+        blackbox_record_event(EVENT_GENETIC_CONFIG_APPLIED, genome->genome_id);
+    }
+}
+\end{lstlisting}
+
+\section{Reporte de Telemetría}
+
+Periódicamente (cada 60 segundos), los Workers reportan métricas a la Queen:
+
+\begin{lstlisting}[caption={Estructura de telemetría}]
+struct genetic_telemetry {
+    uint16_t genome_id;              // Genoma actual
+    uint16_t packets_tx;             // Paquetes enviados
+    uint16_t packets_rx;             // Paquetes recibidos
+    uint16_t packets_dropped;        // Paquetes perdidos
+    uint16_t avg_rtt_ms;             // RTT promedio
+    uint8_t  neighbors_active;       // Vecinos activos
+    uint8_t  security_violations;    // Violaciones de seguridad
+    uint16_t uptime_minutes;         // Tiempo activo
+};
+\end{lstlisting}
+
+\section{API del Receptor Genético}
+
+\begin{lstlisting}[caption={API del receptor genético en Worker}]
+// Inicializar receptor
+void genetic_receiver_init(void);
+
+// Procesar paquete CONFIG_UPDATE
+void genetic_process_config_update(const struct nanos_pheromone *pkt);
+
+// Enviar telemetria a Queen
+void genetic_send_telemetry(void);
+
+// Obtener genoma actual
+uint16_t genetic_get_current_genome_id(void);
+
+// Tick periodico (llamar desde main loop)
+void genetic_tick(void);
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{Nodos Judas: Honeypots Activos (v0.7)}
+%-------------------------------------------------------------------------------
+
+\section{Concepto}
+
+Los \textbf{Nodos Judas} son Workers que, al detectar una intrusión, fingen
+vulnerabilidad para capturar los payloads de los atacantes antes de
+autodestruirse. Este sistema transforma nodos comprometidos en trampas
+que generan inteligencia de amenazas.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node/.style={circle, draw, minimum size=1.8cm, font=\small},
+    attacker/.style={circle, draw, fill=red!40, dashed, minimum size=1.5cm, font=\small},
+    judas/.style={circle, draw, fill=nanosaccent!40, minimum size=1.8cm, font=\small},
+    queen/.style={circle, draw, fill=nanosgreen!40, minimum size=2cm, font=\small},
+    scale=0.75
+]
+    % Attacker
+    \node[attacker] (att) at (-5,0) {Atacante};
+
+    % Judas Node
+    \node[judas] (judas) at (0,0) {Judas};
+
+    % Queen
+    \node[queen] (queen) at (6,0) {Queen};
+
+    % Attack flow
+    \draw[->, thick, red] (att) -- node[above, font=\tiny] {Ataque} (judas);
+
+    % Engagement
+    \draw[->, thick, nanosaccent] (judas) -- node[above, font=\tiny] {JUDAS\_ENGAGE} (queen);
+    \draw[->, thick, dashed] (judas) to[bend right=15]
+        node[below, font=\tiny] {JUDAS\_CAPTURE} (queen);
+    \draw[->, thick, nanosprimary] (judas) to[bend right=30]
+        node[below, font=\tiny] {JUDAS\_FORENSICS} (queen);
+
+    % Death
+    \node[font=\tiny, red] at (0,-2) {$\times$ Apoptosis};
+
+\end{tikzpicture}
+\caption{Flujo de operación de un Nodo Judas}
+\label{fig:judas-flow}
+\end{figure}
+
+\section{Máquina de Estados}
+
+\begin{lstlisting}[caption={Estados del Nodo Judas}]
+typedef enum {
+    JUDAS_STATE_DORMANT,        // Comportamiento normal
+    JUDAS_STATE_SUSPICIOUS,     // Intrusion detectada, evaluando
+    JUDAS_STATE_ENGAGING,       // Fingiendo vulnerabilidad
+    JUDAS_STATE_CAPTURING,      // Grabando payload del atacante
+    JUDAS_STATE_DETONATING      // Apoptosis con forensics
+} judas_state_t;
+\end{lstlisting}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    state/.style={draw, rounded corners, minimum width=2.5cm,
+                  minimum height=1cm, text centered, font=\small},
+    scale=0.75
+]
+    % States
+    \node[state, fill=nanosgreen!20] (dormant) at (0,0) {DORMANT};
+    \node[state, fill=nanossecondary!20] (suspicious) at (4,0) {SUSPICIOUS};
+    \node[state, fill=nanosprimary!20] (engaging) at (8,0) {ENGAGING};
+    \node[state, fill=nanosaccent!20] (capturing) at (8,-3) {CAPTURING};
+    \node[state, fill=red!30] (detonating) at (4,-3) {DETONATING};
+
+    % Transitions
+    \draw[arrow] (dormant) -- node[above, font=\tiny] {bad MAC} (suspicious);
+    \draw[arrow] (suspicious) -- node[above, font=\tiny] {umbral} (engaging);
+    \draw[arrow] (engaging) -- node[right, font=\tiny] {payload} (capturing);
+    \draw[arrow] (capturing) -- node[below, font=\tiny] {completo} (detonating);
+    \draw[arrow] (suspicious) to[bend right=30] node[below, font=\tiny] {timeout} (dormant);
+
+\end{tikzpicture}
+\caption{Máquina de estados del Nodo Judas}
+\label{fig:judas-states}
+\end{figure}
+
+\section{Triggers de Activación}
+
+\begin{lstlisting}[caption={Configuración de triggers Judas}]
+struct judas_trigger_config {
+    uint8_t  bad_mac_threshold;      // MACs fallidos para activar [3-10]
+    uint8_t  replay_threshold;       // Replays para activar [2-5]
+    uint8_t  probe_threshold;        // Probes anomalos [5-15]
+    uint16_t engage_timeout_ms;      // Timeout en ENGAGING [5000-30000]
+    uint16_t capture_max_bytes;      // Max bytes a capturar [256-1024]
+    uint8_t  auto_detonate;          // Detonar automaticamente
+};
+\end{lstlisting}
+
+\section{Estructura de Captura}
+
+\begin{lstlisting}[caption={Datos capturados por Judas}]
+struct judas_capture {
+    uint32_t attacker_id;           // Node ID del atacante
+    uint8_t  attacker_mac[6];       // MAC del atacante
+    uint32_t engage_tick;           // Cuando se engancho
+    uint32_t capture_tick;          // Cuando se capturo
+
+    // Tecnicas observadas
+    uint8_t  bad_mac_count;         // MACs invalidos
+    uint8_t  replay_count;          // Intentos de replay
+    uint8_t  probe_count;           // Probes anomalos
+    uint8_t  injection_attempts;    // Intentos de inyeccion
+
+    // Payload capturado
+    uint16_t payload_len;
+    uint8_t  payload[512];          // Maximo payload del atacante
+
+    // Hash para deduplicacion
+    uint32_t payload_hash;
+};
+\end{lstlisting}
+
+\section{Integración con AIS}
+
+El sistema Judas se integra con el Sistema Inmune Artificial:
+
+\begin{lstlisting}[caption={Integración Judas-AIS}]
+// En ais_on_anomaly():
+if (g_state.judas_mode_enabled) {
+    if (detect_type == AIS_DETECT_INJECTION ||
+        detect_type == AIS_DETECT_PROBE) {
+        // Transicionar a modo Judas en lugar de rechazar
+        judas_enter_suspicious(source_node, detect_type);
+        return;  // No alertar al atacante
+    }
+}
+\end{lstlisting}
+
+\section{Transmisión de Forensics}
+
+Antes de la apoptosis, el nodo Judas transmite toda la evidencia:
+
+\begin{lstlisting}[caption={Transmisión de forensics antes de morir}]
+void judas_detonate(void) {
+    // 1. Notificar a Queen
+    struct judas_capture *cap = &g_judas.capture;
+    pheromone_send_judas_capture(cap);
+
+    // 2. Transmitir BlackBox completo
+    blackbox_emit_last_will();
+
+    // 3. Transmitir forensics especifico
+    pheromone_send_judas_forensics(&g_judas);
+
+    // 4. Apoptosis
+    nanos_die(DEATH_REASON_JUDAS_DETONATE);
+}
+\end{lstlisting}
+
+\section{API del Sistema Judas}
+
+\begin{lstlisting}[caption={API del sistema Judas}]
+// Inicializar sistema Judas
+void judas_init(void);
+
+// Habilitar/deshabilitar modo Judas
+void judas_set_enabled(bool enabled);
+
+// Transicion a estado sospechoso
+void judas_enter_suspicious(uint32_t source, uint8_t trigger_type);
+
+// Registrar actividad del atacante
+void judas_record_activity(const void *data, uint16_t len);
+
+// Forzar detonacion
+void judas_detonate(void);
+
+// Tick periodico
+void judas_tick(void);
+
+// Estado actual
+judas_state_t judas_get_state(void);
+\end{lstlisting}
+
+%-------------------------------------------------------------------------------
+\chapter{Canales Encubiertos (v0.7)}
+%-------------------------------------------------------------------------------
+
+\section{Visión General}
+
+Los \textbf{Canales Encubiertos} permiten comunicación física entre nodos
+utilizando side-channels como LEDs y buzzers. Esto habilita la comunicación
+en entornos air-gapped donde la red tradicional no está disponible.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=3cm, minimum height=2cm,
+                text centered, font=\small},
+    scale=0.8
+]
+    % TX Node
+    \node[box, fill=nanosprimary!20] (tx) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{Nodo TX}\\
+            \small LED/Buzzer
+        \end{tabular}
+    };
+
+    % RX Node
+    \node[box, fill=nanosgreen!20] (rx) at (8,0) {
+        \begin{tabular}{c}
+            \textbf{Nodo RX}\\
+            \small Sensor/Mic
+        \end{tabular}
+    };
+
+    % Optical channel
+    \draw[->, thick, nanosaccent, decorate, decoration={snake, amplitude=2pt}]
+        (tx.east) -- node[above, font=\small] {$\sim$ Luz/Sonido $\sim$} (rx.west);
+
+\end{tikzpicture}
+\caption{Comunicación por canal encubierto}
+\label{fig:covert-channel}
+\end{figure}
+
+\section{Canal Óptico (LED-to-Light Sensor)}
+
+\subsection{Características}
+
+\begin{itemize}
+    \item \textbf{Transmisor}: LED controlado por PWM
+    \item \textbf{Receptor}: Fotorresistor o fotodiodo conectado a ADC
+    \item \textbf{Modulación}: On-Off Keying (OOK) o Manchester
+    \item \textbf{Velocidad}: 10--100 bps
+    \item \textbf{Alcance}: 1--5 metros (dependiente de luz ambiental)
+\end{itemize}
+
+\subsection{Codificación Manchester}
+
+Manchester encoding proporciona auto-sincronización:
+
+\begin{lstlisting}[caption={Codificación Manchester}]
+// Bit 0: transicion HIGH->LOW en mitad del periodo
+// Bit 1: transicion LOW->HIGH en mitad del periodo
+
+void covert_manchester_encode_bit(uint8_t bit) {
+    if (bit) {
+        // Bit 1: LOW primera mitad, HIGH segunda mitad
+        led_set(0);
+        delay_us(BIT_PERIOD_US / 2);
+        led_set(1);
+        delay_us(BIT_PERIOD_US / 2);
+    } else {
+        // Bit 0: HIGH primera mitad, LOW segunda mitad
+        led_set(1);
+        delay_us(BIT_PERIOD_US / 2);
+        led_set(0);
+        delay_us(BIT_PERIOD_US / 2);
+    }
+}
+\end{lstlisting}
+
+\section{Canal Acústico (Buzzer-to-Mic)}
+
+\subsection{Características}
+
+\begin{itemize}
+    \item \textbf{Transmisor}: Buzzer piezoeléctrico con PWM
+    \item \textbf{Receptor}: Micrófono analógico o I2S
+    \item \textbf{Modulación}: FSK (Frequency Shift Keying)
+    \item \textbf{Frecuencias}: 1kHz/2kHz (audible) o 18kHz/20kHz (ultrasónico)
+    \item \textbf{Velocidad}: 50--200 bps
+\end{itemize}
+
+\subsection{Modulación FSK}
+
+\begin{lstlisting}[caption={Modulación FSK para canal acústico}]
+#define FREQ_ZERO   1000    // Hz para bit 0
+#define FREQ_ONE    2000    // Hz para bit 1
+#define BIT_TIME_MS 20      // Duracion de cada bit
+
+void covert_fsk_send_bit(uint8_t bit) {
+    uint16_t freq = bit ? FREQ_ONE : FREQ_ZERO;
+    buzzer_set_frequency(freq);
+    buzzer_enable();
+    delay_ms(BIT_TIME_MS);
+    buzzer_disable();
+}
+\end{lstlisting}
+
+\section{Estructura del Frame}
+
+\begin{lstlisting}[caption={Estructura del frame covert}]
+#define COVERT_SYNC_PATTERN     0xAA
+#define COVERT_CHANNEL_OPTICAL  0x01
+#define COVERT_CHANNEL_ACOUSTIC 0x02
+
+struct covert_frame {
+    uint8_t  sync_pattern;      // 0xAA para sincronizacion
+    uint8_t  channel_type;      // OPTICAL o ACOUSTIC
+    uint8_t  payload_len;       // 1-16 bytes
+    uint8_t  payload[16];       // Datos
+    uint8_t  crc8;              // Checksum
+};
+\end{lstlisting}
+
+\section{API de Canales Encubiertos}
+
+\begin{lstlisting}[caption={API de canales encubiertos}]
+// Inicializar transmisor
+void covert_tx_init(uint8_t channel);
+
+// Enviar datos
+int covert_tx_send(const void *data, uint8_t len);
+
+// Inicializar receptor
+void covert_rx_init(uint8_t channel, uint8_t gpio_sensor);
+
+// Recibir datos (bloqueante con timeout)
+int covert_rx_receive(void *buffer, uint8_t max_len, uint32_t timeout_ms);
+
+// Calibrar receptor
+void covert_rx_calibrate(void);
+
+// Obtener estadisticas
+void covert_get_stats(struct covert_stats *stats);
+\end{lstlisting}
+
+\section{Consideraciones de Seguridad}
+
+\begin{warningbox}[Seguridad de Canales Encubiertos]
+\begin{itemize}
+    \item Los datos transmitidos por canal encubierto \textbf{deben} encriptarse
+          con la misma clave de sesión NERT
+    \item Incluir sequence number para prevenir replay attacks
+    \item El payload máximo es 16 bytes por frame
+    \item Los canales encubiertos son detectables; usar con discreción
+\end{itemize}
+\end{warningbox}
+
+\begin{lstlisting}[caption={Encriptación de datos covert}]
+int covert_send_secure(const void *data, uint8_t len) {
+    uint8_t encrypted[16];
+
+    // Encriptar con ChaCha8
+    chacha8_encrypt(g_state.session_key, g_state.covert_nonce,
+                    data, encrypted, len);
+
+    // Incrementar nonce
+    g_state.covert_nonce++;
+
+    // Enviar por canal encubierto
+    return covert_tx_send(encrypted, len);
+}
+\end{lstlisting}
+
 %===============================================================================
 % PART II: NERT Protocol
 %===============================================================================
@@ -3241,6 +3751,209 @@ Para la clase CRITICAL, NERT utiliza FEC basado en XOR:
 \label{fig:multipath}
 \end{figure}
 
+%-------------------------------------------------------------------------------
+\chapter{Hive Bridge: Integración con micrOS}
+%-------------------------------------------------------------------------------
+
+\section{Arquitectura del Enjambre Híbrido}
+
+El \textbf{Hive Bridge} permite la comunicación bidireccional entre nodos NanOS
+(obreras) y micrOS (reina). Esta arquitectura híbrida combina:
+
+\begin{itemize}
+    \item \textbf{micrOS}: Sistema operativo distribuido completo actuando como reina
+    \item \textbf{NanOS}: Nodos desechables actuando como obreras del enjambre
+\end{itemize}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    queen/.style={circle, draw=nanosaccent, fill=nanosaccent!30,
+                  minimum size=3cm, line width=2pt, font=\small},
+    worker/.style={circle, draw=nanosprimary, fill=nanosprimary!20,
+                   minimum size=1.5cm, font=\tiny},
+    scale=0.8
+]
+    % Queen (micrOS)
+    \node[queen] (queen) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{micrOS}\\
+            Queen\\
+            ID: 0x0101
+        \end{tabular}
+    };
+
+    % Workers (NanOS)
+    \foreach \i/\angle in {1/30, 2/90, 3/150, 4/210, 5/270, 6/330} {
+        \node[worker] (w\i) at (\angle:4cm) {
+            NanOS\\
+            0x0\i\i\i
+        };
+        \draw[->, thick, nanosprimary!60] (queen) -- (w\i);
+        \draw[<-, thick, nanosgreen!60, dashed] (queen.{\angle}) -- (w\i);
+    }
+
+    % Legend
+    \node[anchor=west, font=\small] at (5,2) {\textcolor{nanosprimary!60}{$\rightarrow$} ANNOUNCE/CMD};
+    \node[anchor=west, font=\small] at (5,1.5) {\textcolor{nanosgreen!60}{$\leftarrow$} ECHO/DATA};
+
+\end{tikzpicture}
+\caption{Arquitectura Hive: micrOS como Queen coordinando nodos NanOS}
+\label{fig:hive-bridge-arch}
+\end{figure}
+
+\section{Detección de la Reina}
+
+Cuando un nodo NanOS detecta un paquete ANNOUNCE de micrOS:
+
+\begin{lstlisting}[caption={Detección de micrOS como reina}]
+void on_announce_received(uint16_t sender_id, const void *data, uint8_t len) {
+    announce_data_t *announce = (announce_data_t*)data;
+
+    // micrOS se anuncia con role = ROLE_QUEEN y distance = 0
+    if (announce->role == ROLE_QUEEN && announce->distance == 0) {
+        // Encontramos la reina!
+        g_queen_id = sender_id;
+        g_distance_to_queen = 1;  // Directo a la reina
+
+        LOG_INFO("HIVE", "Queen detected: 0x%04x", sender_id);
+
+        // Actualizar gradiente
+        update_gradient(sender_id, 0);
+    }
+}
+\end{lstlisting}
+
+\section{Servicio NERT en micrOS}
+
+micrOS implementa un servicio NERT que:
+
+\begin{enumerate}
+    \item \textbf{PHY Adapter}: Traduce entre el stack DOD de micrOS y NERT
+    \item \textbf{Swarm State}: Mantiene estado de todos los nodos del enjambre
+    \item \textbf{Polling}: Procesa pheromones incluso sin scheduler activo
+\end{enumerate}
+
+\begin{lstlisting}[caption={Estructura del estado del swarm en micrOS}]
+typedef struct {
+    swarm_node_entry_t nodes[32];  /* Nodos conocidos */
+    uint32_t node_count;
+    swarm_metrics_t metrics;       /* Metricas agregadas */
+    uint16_t local_node_id;        /* ID de micrOS (queen) */
+    uint8_t  initialized;
+    uint8_t  running;
+} swarm_state_t;
+\end{lstlisting}
+
+\section{Comunicación Bidireccional}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners, minimum width=3cm,
+                minimum height=1.2cm, text centered, font=\small},
+    scale=0.9
+]
+    % micrOS side
+    \node[box, fill=nanosaccent!20] (micros) at (0,0) {
+        \begin{tabular}{c}
+            \textbf{micrOS}\\
+            nert\_service.c
+        \end{tabular}
+    };
+
+    % NanOS side
+    \node[box, fill=nanosprimary!20] (nanos) at (8,0) {
+        \begin{tabular}{c}
+            \textbf{NanOS}\\
+            kernel.c
+        \end{tabular}
+    };
+
+    % NERT Protocol layer
+    \node[box, fill=nanosgreen!20, minimum width=5cm] (nert) at (4,0) {
+        \begin{tabular}{c}
+            \textbf{NERT Protocol}\\
+            EtherType 0x4E4F
+        \end{tabular}
+    };
+
+    % Arrows
+    \draw[->, thick, nanosprimary] (micros.east) -- ++(0.5,0.5) -- ++(2.5,0)
+        node[midway, above, font=\tiny] {ANNOUNCE, CMD, REKEY};
+    \draw[->, thick, nanosgreen] (nanos.west) -- ++(-0.5,-0.5) -- ++(-2.5,0)
+        node[midway, below, font=\tiny] {ECHO, ALARM, DATA};
+
+\end{tikzpicture}
+\caption{Flujo de comunicación entre micrOS y NanOS vía NERT}
+\label{fig:hive-comm-flow}
+\end{figure}
+
+\section{Polling en micrOS}
+
+Cuando el scheduler de micrOS no está activo, el shell debe pollear manualmente:
+
+\begin{lstlisting}[caption={Polling de NERT en el shell de micrOS}]
+// En micrOS shell.c
+void shell_run(void) {
+    while (g_running) {
+        char c = keyboard_getchar_nonblock();
+        if (c != 0) {
+            shell_input_char(c);
+        }
+
+        // Critico: Poll NERT para comunicacion con swarm
+        nert_service_poll();
+
+        shell_cpu_halt();
+    }
+}
+\end{lstlisting}
+
+\begin{warningbox}[Importante]
+Sin el polling manual, micrOS no procesará pheromones entrantes de los nodos
+NanOS cuando el scheduler no esté realizando context switches.
+\end{warningbox}
+
+\section{Verificación de Conectividad}
+
+Para verificar que NanOS detecta a micrOS como reina:
+
+\begin{lstlisting}[caption={Salida esperada en NanOS}]
+[NERT] RX pheromone: type=0x01 from=0x0101 dist=0
+[HIVE] Queen detected: 0x0101
+[GRADIENT] Updated: queen=0x0101 distance=1
+
+# Status command shows:
+> status
+  Node ID:   0x0A01
+  Role:      WORKER
+  Queen:     0x0101
+  Distance:  1
+  Uptime:    42s
+\end{lstlisting}
+
+\section{Comandos de la Reina}
+
+micrOS puede enviar comandos a los nodos NanOS mediante pheromones COMMAND:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clp{5cm}}
+\toprule
+\textbf{Código} & \textbf{Comando} & \textbf{Descripción} \\
+\midrule
+0x01 & ROLE\_ASSIGN & Cambiar rol del nodo \\
+0x02 & TASK\_EXEC & Ejecutar tarea específica \\
+0x03 & CONFIG\_SET & Modificar configuración \\
+0x10 & STATUS\_REQ & Solicitar status del nodo \\
+0x13 & DIE & Ordenar apoptosis \\
+\bottomrule
+\end{tabular}
+\caption{Comandos de la reina a nodos worker}
+\label{tab:queen-commands}
+\end{table}
+
 %===============================================================================
 % PART III: Implementation Guide
 %===============================================================================
@@ -3576,6 +4289,10 @@ EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
     \item[Bloom Filter] Estructura de datos probabilística para pruebas de
         membresía con eficiencia de espacio.
 
+    \item[Canal Encubierto (v0.7)] Covert Channel. Comunicación física a través
+        de side-channels como LEDs (óptico) o buzzers (acústico) para entornos
+        air-gapped donde la red tradicional no está disponible.
+
     \item[Época (Epoch)] Período de tiempo durante el cual una clave de
         sesión es válida (por defecto: 1 hora).
 
@@ -3584,6 +4301,13 @@ EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
 
     \item[Gradiente] Campo escalar que indica la distancia a la reina,
         usado para enrutamiento.
+
+    \item[Genetic Tuning (v0.7)] Sintonización Genética. Sistema de auto-optimización
+        de parámetros NERT mediante algoritmos genéticos. La Queen mantiene una
+        población de genomas y los distribuye a sub-swarms para evaluación comparativa.
+
+    \item[Genome (v0.7)] Estructura de 32 bytes que codifica parámetros optimizables
+        de NERT como genes evolucionables (timing, gossip, seguridad).
 
     \item[Gossip Protocol] Protocolo de diseminación epidémica de información.
 
@@ -3598,11 +4322,19 @@ EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
 
     \item[HMAC] Hash-based Message Authentication Code.
 
+    \item[Judas Node (v0.7)] Nodo Judas. Honeypot activo que, al detectar intrusión,
+        finge vulnerabilidad para capturar payloads de atacantes antes de
+        autodestruirse. Transmite evidencia forense a la Queen antes de la apoptosis.
+
     \item[LTD] Long-Term Depression. Debilitamiento de conexiones sinápticas
         tras eventos negativos (timeouts, fallos de entrega).
 
     \item[LTP] Long-Term Potentiation. Fortalecimiento de conexiones sinápticas
         tras eventos positivos (ACKs exitosos).
+
+    \item[Manchester Encoding (v0.7)] Codificación donde cada bit se representa
+        mediante una transición en mitad del período. Proporciona auto-sincronización
+        para canales encubiertos ópticos.
 
     \item[Nodo Desechable] Nodo diseñado con vida útil limitada que
         regenera al morir.
@@ -3626,10 +4358,18 @@ EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
         del ambiente. En NanOS, feromonas digitales que decaen con el tiempo
         y modifican costos de movimiento. ``Las hormigas no memorizan mapas.''
 
+    \item[Sub-Swarm (v0.7)] Grupo de Workers que comparten el mismo genoma
+        durante un período de evaluación. Permite A/B testing evolutivo de
+        configuraciones NERT.
+
     \item[Swarm] Conjunto de nodos comunicándose colectivamente.
 
     \item[Synaptic Weight] Peso sináptico. Valor [1-255] que representa la
         confiabilidad aprendida de una conexión con un vecino.
+
+    \item[Telemetry (v0.7)] Métricas de rendimiento (throughput, latency,
+        reliability, security, survival) enviadas periódicamente por Workers
+        a Queen para evaluar fitness de genomas.
 \end{description}
 
 %-------------------------------------------------------------------------------
@@ -3641,15 +4381,18 @@ EVENT\_HWVAL\_FLASH\_TAMPER & 0x24 & Flash alterado \\
 \chapter*{Sobre Este Documento}
 \addcontentsline{toc}{chapter}{Sobre Este Documento}
 
-Este manual técnico fue generado como parte del proyecto NanOS v0.6.
+Este manual técnico fue generado como parte del proyecto NanOS v0.7.
 Cubre la arquitectura del sistema operativo, el protocolo NERT diseñado
 específicamente para comunicación entre nodos desechables, el sistema
 de enrutamiento Hebbiano inspirado en neurociencia, el sistema de feromonas
 digitales Stigmergia, la Black Box distribuida para evidencia forense,
 el Sistema Inmune Artificial (AIS) para detección de ataques 0-day,
 el sistema de Polimorfismo de Código ``El Camaleón'' para diversidad binaria,
-y la Validación de Hardware ``El Centinela del Silicio'' para detección de
-manipulación física.
+la Validación de Hardware ``El Centinela del Silicio'' para detección de
+manipulación física, el sistema de Sintonización Genética para auto-optimización
+evolutiva de parámetros NERT, los Nodos Judas como honeypots activos para
+captura de inteligencia de amenazas, y los Canales Encubiertos para comunicación
+física en entornos air-gapped.
 
 \vspace{1cm}
 

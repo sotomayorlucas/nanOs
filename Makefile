@@ -30,7 +30,7 @@ ifeq ($(ARCH),x86)
     ISO     := nanos-x86.iso
 
     ASM_SRC := boot/boot.asm
-    C_SRC   := kernel/kernel.c kernel/collective.c \
+    C_SRC   := kernel/kernel.c kernel/collective.c kernel/blackbox.c \
                 kernel/memory/allocator.c \
                 kernel/protocol/bloom.c kernel/protocol/gossip.c kernel/protocol/hmac.c \
                 kernel/tactical/intelligence.c kernel/tactical/maze.c kernel/tactical/terrain.c \
