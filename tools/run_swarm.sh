@@ -20,9 +20,10 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
+# NOTE: Must match micrOS multicast config (230.0.0.1:1234)
 NUM_NODES=3
-MULTICAST_GROUP="239.255.0.1"
-PORT=5555
+MULTICAST_GROUP="230.0.0.1"
+PORT=1234
 LOG_DIR="$PROJECT_ROOT/logs"
 
 echo -e "${BLUE}╔════════════════════════════════════════════════╗${NC}"
@@ -50,12 +51,12 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -n, --nodes N       Number of nodes to spawn (default: 3)"
-            echo "  -m, --multicast IP  Multicast group (default: 239.255.0.1)"
-            echo "  -p, --port PORT     UDP port (default: 5555)"
+            echo "  -m, --multicast IP  Multicast group (default: 230.0.0.1)"
+            echo "  -p, --port PORT     UDP port (default: 1234)"
             echo "  -h, --help          Show this help"
             echo ""
             echo "Example:"
-            echo "  $0 --nodes 5 --multicast 239.255.0.1 --port 5555"
+            echo "  $0 --nodes 5 --multicast 230.0.0.1 --port 1234"
             exit 0
             ;;
         *)
