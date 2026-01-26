@@ -822,6 +822,33 @@ int nert_send_critical(uint16_t dest_id, uint8_t pheromone_type,
                        const void *data, uint8_t len);
 
 /* ----------------------------------------------------------------------------
+ * Multi-Path Routing (v0.5)
+ * ---------------------------------------------------------------------------- */
+
+#if NERT_ENABLE_MULTIPATH
+
+/**
+ * Select diverse paths for multi-path transmission
+ * Uses Hebbian weights and avoids recently-failed paths.
+ *
+ * @param dest_id       Destination node ID
+ * @param paths         Output array for via-node IDs
+ * @param max_paths     Maximum paths to select (up to NERT_MAX_PATHS)
+ * @return              Number of paths selected
+ */
+int nert_select_diverse_paths(uint16_t dest_id, uint16_t *paths, uint8_t max_paths);
+
+/**
+ * Report a path failure for routing feedback
+ * Marks the path as failed and updates Hebbian weight.
+ *
+ * @param node_id   Node that failed to respond
+ */
+void nert_report_path_failure(uint16_t node_id);
+
+#endif /* NERT_ENABLE_MULTIPATH */
+
+/* ----------------------------------------------------------------------------
  * Connection Management
  * ---------------------------------------------------------------------------- */
 
@@ -1172,6 +1199,29 @@ void nert_reset_stats(void);
  */
 void nert_debug_packet(const char *prefix, const struct nert_packet *pkt);
 #endif
+
+/* ----------------------------------------------------------------------------
+ * Crypto Self-Test API
+ * ---------------------------------------------------------------------------- */
+
+/**
+ * Run ChaCha8 self-test with known test vectors
+ * @return 0 on success, -1 on failure
+ */
+int chacha8_self_test(void);
+
+/**
+ * Run Poly1305 self-test
+ * @return 0 on success, -1 on failure
+ */
+int poly1305_self_test(void);
+
+/**
+ * Run all crypto self-tests (ChaCha8 + Poly1305)
+ * Called automatically during nert_init()
+ * @return 0 on all tests pass, -1 on any failure
+ */
+int nert_crypto_self_test(void);
 
 /* ============================================================================
  * HAL Interface (to be implemented per platform)

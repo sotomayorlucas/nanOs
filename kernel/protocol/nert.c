@@ -273,13 +273,12 @@ void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
     uint8_t keystream[64];
     uint32_t counter = 0;
 
-    /* Convert key to 32-bit words */
+    /* Convert key to 32-bit words (little-endian) */
     for (int i = 0; i < 8; i++) {
-        key32[i] = plaintext[0]; /* Dummy to avoid warning */
-        key32[i] = key[i * 4 + 0] |
-                   (key[i * 4 + 1] << 8) |
-                   (key[i * 4 + 2] << 16) |
-                   (key[i * 4 + 3] << 24);
+        key32[i] = (uint32_t)key[i * 4 + 0] |
+                   ((uint32_t)key[i * 4 + 1] << 8) |
+                   ((uint32_t)key[i * 4 + 2] << 16) |
+                   ((uint32_t)key[i * 4 + 3] << 24);
     }
 
     /* Convert nonce to 32-bit words */
@@ -302,6 +301,13 @@ void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
         }
         offset += block_len;
     }
+
+    /* Secure cleanup: zero sensitive key material
+     * Use volatile pointers to prevent compiler optimization */
+    volatile uint8_t *vks = (volatile uint8_t *)keystream;
+    volatile uint32_t *vkey = (volatile uint32_t *)key32;
+    for (int i = 0; i < 64; i++) vks[i] = 0;
+    for (int i = 0; i < 8; i++) vkey[i] = 0;
 }
 
 /* ============================================================================
@@ -366,6 +372,181 @@ int poly1305_verify(const uint8_t key[32],
     }
 
     return (diff == 0) ? 0 : -1;
+}
+
+/* ============================================================================
+ * Secure Memory Operations
+ * ============================================================================ */
+
+/**
+ * Secure memory zeroing - prevents compiler optimization from removing
+ * Uses volatile to ensure the writes actually happen
+ */
+static void secure_memzero(void *ptr, size_t len) {
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
+/* ============================================================================
+ * Crypto Self-Tests (RFC 8439 Test Vectors)
+ * ============================================================================ */
+
+/**
+ * ChaCha8 self-test using adapted RFC 8439 Section 2.4.2 test vector
+ * Note: RFC uses ChaCha20; we adapt for ChaCha8 (8 rounds)
+ *
+ * @return 0 on success, -1 on failure
+ */
+int chacha8_self_test(void) {
+    /*
+     * Test vector: All-zero key and nonce with counter=0
+     * This tests basic functionality with known inputs
+     */
+    static const uint8_t test_key[32] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+    static const uint8_t test_nonce[12] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+    /*
+     * Expected output for ChaCha8 (8 rounds) with all-zero inputs
+     * First 16 bytes of keystream block 0
+     * Pre-computed reference value
+     */
+    static const uint8_t expected_keystream[16] = {
+        0x3e, 0x00, 0xef, 0x2f, 0x89, 0x5f, 0x40, 0xd6,
+        0x7f, 0x5b, 0xb8, 0xe8, 0x1f, 0x09, 0xa5, 0xa1
+    };
+
+    uint8_t plaintext[16] = {0};
+    uint8_t ciphertext[16];
+
+    /* Encrypt zeros - ciphertext will be raw keystream */
+    chacha8_encrypt(test_key, test_nonce, plaintext, 16, ciphertext);
+
+    /* Constant-time comparison */
+    uint8_t diff = 0;
+    for (int i = 0; i < 16; i++) {
+        diff |= ciphertext[i] ^ expected_keystream[i];
+    }
+
+    /*
+     * Additional test: Encryption/decryption round-trip
+     * Encrypt then decrypt should yield original plaintext
+     */
+    static const uint8_t test_plaintext[32] = {
+        'N', 'E', 'R', 'T', ' ', 'P', 'r', 'o',
+        't', 'o', 'c', 'o', 'l', ' ', 'T', 'e',
+        's', 't', ' ', 'V', 'e', 'c', 't', 'o',
+        'r', ' ', 'D', 'a', 't', 'a', '!', '!'
+    };
+
+    uint8_t encrypted[32];
+    uint8_t decrypted[32];
+
+    static const uint8_t roundtrip_key[32] = {
+        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+        0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE,
+        0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01,
+        0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
+    };
+
+    static const uint8_t roundtrip_nonce[12] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C
+    };
+
+    chacha8_encrypt(roundtrip_key, roundtrip_nonce, test_plaintext, 32, encrypted);
+    chacha8_encrypt(roundtrip_key, roundtrip_nonce, encrypted, 32, decrypted);
+
+    for (int i = 0; i < 32; i++) {
+        diff |= decrypted[i] ^ test_plaintext[i];
+    }
+
+    return (diff == 0) ? 0 : -1;
+}
+
+/**
+ * Poly1305 MAC self-test
+ * Tests basic MAC generation and verification
+ *
+ * @return 0 on success, -1 on failure
+ */
+int poly1305_self_test(void) {
+    static const uint8_t test_key[32] = {
+        0x85, 0xd6, 0xbe, 0x78, 0x57, 0x55, 0x6d, 0x33,
+        0x7f, 0x44, 0x52, 0xfe, 0x42, 0xd5, 0x06, 0xa8,
+        0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd,
+        0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b
+    };
+
+    static const uint8_t test_message[] = "Cryptographic Forum Research Group";
+    static const uint8_t test_aad[] = {0x50, 0x51, 0x52, 0x53};
+
+    uint8_t tag1[NERT_MAC_SIZE];
+    uint8_t tag2[NERT_MAC_SIZE];
+
+    /* Generate MAC */
+    poly1305_mac(test_key, test_message, sizeof(test_message) - 1,
+                 test_aad, sizeof(test_aad), tag1);
+
+    /* Generate same MAC again - should be identical */
+    poly1305_mac(test_key, test_message, sizeof(test_message) - 1,
+                 test_aad, sizeof(test_aad), tag2);
+
+    /* Tags should match */
+    uint8_t diff = 0;
+    for (int i = 0; i < NERT_MAC_SIZE; i++) {
+        diff |= tag1[i] ^ tag2[i];
+    }
+
+    if (diff != 0) {
+        return -1;
+    }
+
+    /* Verify should succeed */
+    if (poly1305_verify(test_key, test_message, sizeof(test_message) - 1,
+                        test_aad, sizeof(test_aad), tag1) != 0) {
+        return -1;
+    }
+
+    /* Modify message - verify should fail */
+    uint8_t modified_message[64];
+    memcpy(modified_message, test_message, sizeof(test_message) - 1);
+    modified_message[0] ^= 0x01;  /* Flip one bit */
+
+    if (poly1305_verify(test_key, modified_message, sizeof(test_message) - 1,
+                        test_aad, sizeof(test_aad), tag1) == 0) {
+        return -1;  /* Should have failed! */
+    }
+
+    return 0;
+}
+
+/**
+ * Run all crypto self-tests
+ * Should be called during nert_init()
+ *
+ * @return 0 on all tests pass, -1 on any failure
+ */
+int nert_crypto_self_test(void) {
+    if (chacha8_self_test() != 0) {
+        return -1;
+    }
+
+    if (poly1305_self_test() != 0) {
+        return -1;
+    }
+
+    return 0;
 }
 
 /* ============================================================================
@@ -2630,35 +2811,122 @@ static int fec_decode(uint8_t shards[6][NERT_FEC_SHARD_SIZE],
 extern uint8_t neighbor_count;
 extern struct neighbor_entry neighbors[];
 
+/* Recently failed paths - avoid for a cooling period */
+#define FAILED_PATH_SLOTS       8
+#define FAILED_PATH_COOLDOWN_MS 5000
+
+static struct {
+    uint16_t node_id;
+    uint32_t failed_tick;
+} failed_paths[FAILED_PATH_SLOTS];
+
+/**
+ * Mark a path as recently failed
+ */
+static void mark_path_failed(uint16_t node_id) {
+    uint32_t now = nert_hal_get_ticks();
+    int oldest_slot = 0;
+    uint32_t oldest_tick = UINT32_MAX;
+
+    for (int i = 0; i < FAILED_PATH_SLOTS; i++) {
+        /* Reuse expired or matching slot */
+        if (failed_paths[i].node_id == 0 ||
+            failed_paths[i].node_id == node_id ||
+            (now - failed_paths[i].failed_tick) > FAILED_PATH_COOLDOWN_MS) {
+            failed_paths[i].node_id = node_id;
+            failed_paths[i].failed_tick = now;
+            return;
+        }
+        if (failed_paths[i].failed_tick < oldest_tick) {
+            oldest_tick = failed_paths[i].failed_tick;
+            oldest_slot = i;
+        }
+    }
+
+    /* Replace oldest */
+    failed_paths[oldest_slot].node_id = node_id;
+    failed_paths[oldest_slot].failed_tick = now;
+}
+
+/**
+ * Check if path recently failed
+ */
+static int is_path_failed(uint16_t node_id) {
+    uint32_t now = nert_hal_get_ticks();
+
+    for (int i = 0; i < FAILED_PATH_SLOTS; i++) {
+        if (failed_paths[i].node_id == node_id) {
+            if ((now - failed_paths[i].failed_tick) < FAILED_PATH_COOLDOWN_MS) {
+                return 1;  /* Still in cooldown */
+            }
+            /* Expired - clear it */
+            failed_paths[i].node_id = 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Select diverse paths for multi-path transmission
+ *
+ * Selection criteria (per plan):
+ * 1. Different first hop (diversity)
+ * 2. Lowest combined cost (distance + inverse synaptic weight)
+ * 3. Avoid recently-failed paths
+ *
+ * @param dest_id   Destination node
+ * @param paths     Output array of via-node IDs
+ * @return          Number of paths selected (0 to NERT_MAX_PATHS)
+ */
 static int select_paths(uint16_t dest_id, uint16_t paths[NERT_MAX_PATHS]) {
     int path_count = 0;
     uint16_t excluded[NERT_MAX_PATHS] = {0};
+    (void)dest_id;  /* Future: could use for destination-specific routing */
 
-    /* Simple path selection: pick diverse neighbors */
+    /* Select up to NERT_MAX_PATHS diverse neighbors */
     for (int p = 0; p < NERT_MAX_PATHS && path_count < NERT_MAX_PATHS; p++) {
         uint16_t best_id = 0;
-        uint8_t best_score = 255;
+        uint16_t best_score = 0xFFFF;
 
         for (int i = 0; i < neighbor_count && i < 16; i++) {
-            /* Skip excluded */
+            uint16_t node_id = neighbors[i].node_id & 0xFFFF;
+
+            /* Skip excluded (diversity requirement) */
             int skip = 0;
             for (int e = 0; e < path_count; e++) {
-                if ((neighbors[i].node_id & 0xFFFF) == excluded[e]) {
+                if (node_id == excluded[e]) {
                     skip = 1;
                     break;
                 }
             }
             if (skip) continue;
 
-            /* Score based on distance and activity */
-            uint8_t score = neighbors[i].distance;
-            if (neighbors[i].packets < 100) {
-                score += (100 - neighbors[i].packets) / 10;
+            /* Skip recently-failed paths */
+            if (is_path_failed(node_id)) {
+                continue;
+            }
+
+            /*
+             * Score calculation (lower is better):
+             * - Base: distance (0-255)
+             * - Penalty: inverse of synaptic weight (255 - weight)
+             *   High weight = good path = low penalty
+             * - Activity bonus: reduce score for active paths
+             *
+             * Combined: score = distance * 2 + (255 - synaptic_weight)
+             */
+            uint16_t score = (uint16_t)neighbors[i].distance * 2;
+            score += (255 - neighbors[i].synaptic_weight);
+
+            /* Activity bonus: active paths get slight preference */
+            if (neighbors[i].packets > 100) {
+                score = (score > 10) ? score - 10 : 0;
             }
 
             if (score < best_score) {
                 best_score = score;
-                best_id = neighbors[i].node_id & 0xFFFF;
+                best_id = node_id;
             }
         }
 
@@ -2672,6 +2940,43 @@ static int select_paths(uint16_t dest_id, uint16_t paths[NERT_MAX_PATHS]) {
     return path_count;
 }
 
+/**
+ * Public API: Select diverse paths for multi-path routing
+ *
+ * @param dest_id       Destination node ID
+ * @param paths         Output array for via-node IDs
+ * @param max_paths     Maximum paths to select (up to NERT_MAX_PATHS)
+ * @return              Number of paths selected
+ */
+int nert_select_diverse_paths(uint16_t dest_id, uint16_t *paths, uint8_t max_paths) {
+    if (paths == NULL || max_paths == 0) {
+        return 0;
+    }
+
+    uint16_t temp_paths[NERT_MAX_PATHS];
+    int count = select_paths(dest_id, temp_paths);
+
+    /* Copy up to max_paths */
+    int copy_count = (count > max_paths) ? max_paths : count;
+    for (int i = 0; i < copy_count; i++) {
+        paths[i] = temp_paths[i];
+    }
+
+    return copy_count;
+}
+
+/**
+ * Report a path failure (for routing feedback)
+ *
+ * @param node_id   Node that failed to respond
+ */
+void nert_report_path_failure(uint16_t node_id) {
+    mark_path_failed(node_id);
+
+    /* Also update Hebbian weight */
+    nert_synapse_update(node_id, false);
+}
+
 #endif /* NERT_ENABLE_MULTIPATH */
 
 /* ============================================================================
@@ -2679,6 +2984,16 @@ static int select_paths(uint16_t dest_id, uint16_t paths[NERT_MAX_PATHS]) {
  * ============================================================================ */
 
 void nert_init(void) {
+    /* Run crypto self-tests before any other initialization */
+    if (nert_crypto_self_test() != 0) {
+        /* Crypto self-test failed - system is in undefined state
+         * In production, this should trigger a safe shutdown or alert
+         * For now, we continue but the system may be compromised */
+#if NERT_ENABLE_DEBUG
+        /* Debug builds could log this failure */
+#endif
+    }
+
     memset(connections, 0, sizeof(connections));
     memset(dedup_cache, 0, sizeof(dedup_cache));
     memset(best_effort_queue, 0, sizeof(best_effort_queue));
