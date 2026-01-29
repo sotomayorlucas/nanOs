@@ -8,7 +8,13 @@
 
 /* ==========================================================================
  * Freestanding Type Definitions (no libc dependency)
+ * Use stdint.h/stddef.h if available, otherwise define our own
  * ========================================================================== */
+#ifdef __STDC_VERSION__
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#else
 typedef unsigned char      uint8_t;
 typedef unsigned short     uint16_t;
 typedef unsigned int       uint32_t;
@@ -22,7 +28,10 @@ typedef uint32_t           uintptr_t;
 typedef _Bool              bool;
 #define true  1
 #define false 0
+#ifndef NULL
 #define NULL  ((void*)0)
+#endif
+#endif
 
 /* ==========================================================================
  * Magic Constants

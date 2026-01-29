@@ -14,6 +14,12 @@
 #include "../include/nanos/hmac.h"
 #include "../include/nanos/allocator.h"
 #include "../include/nanos/serial.h"
+#include "../include/nanos/task_handler.h"
+
+/* NERT Protocol Integration */
+#include <nert.h>
+#include "../lib/nert/hal/hal_adapter.h"
+#include "../lib/nert/nert_phy_if.h"
 
 /* ==========================================================================
  * Global State - The cell's memory
@@ -68,6 +74,92 @@ void seed_random(void) {
     rng_state ^= inb(0x40) << 8;
     rng_state ^= inb(0x40) << 16;
     if (rng_state == 0) rng_state = 0xDEADBEEF;
+}
+
+/* ==========================================================================
+ * NERT Protocol Integration
+ * ========================================================================== */
+
+/* NERT enabled flag */
+static uint8_t g_nert_enabled = 0;
+
+/* NERT PHY interface for e1000 */
+static int nert_phy_send(const void *data, uint16_t len, void *ctx) {
+    (void)ctx;
+    return e1000_send((void*)data, len);  /* Cast away const - e1000_send doesn't modify data */
+}
+
+static int nert_phy_receive(void *buffer, uint16_t max_len, void *ctx) {
+    (void)ctx;
+    if (!e1000_has_packet()) return 0;
+    return e1000_receive(buffer, max_len);
+}
+
+static uint32_t nert_phy_get_ticks(void *ctx) {
+    (void)ctx;
+    return ticks;
+}
+
+static uint32_t nert_phy_random(void *ctx) {
+    (void)ctx;
+    return random();
+}
+
+static struct nert_phy_interface g_nert_phy = {
+    .send = nert_phy_send,
+    .receive = nert_phy_receive,
+    .get_ticks = nert_phy_get_ticks,
+    .random = nert_phy_random,
+    .context = NULL
+};
+
+/* NERT message handler - dispatches pheromones to appropriate handlers */
+static void nert_message_handler(uint16_t sender_id, uint8_t msg_type,
+                                  const void *data, uint8_t len) {
+    (void)len;
+
+    /* Increment RX counter for received NERT packets */
+    g_state.packets_rx++;
+
+    switch (msg_type) {
+        case 0xA0:  /* PHEROMONE_TASK_ASSIGN */
+            task_handler_process_pheromone((const struct task_payload*)data);
+            break;
+
+        case 0x14:  /* PHEROMONE_CONFIG_UPDATE - Genetic config from Queen */
+            /* TODO: Handle genetic configuration updates */
+            serial_puts("[NERT] Config update from ");
+            serial_put_hex(sender_id);
+            serial_puts("\n");
+            break;
+
+        case 0x13:  /* PHEROMONE_DIE - Apoptosis trigger */
+            serial_puts("[NERT] DIE command from Queen!\n");
+            cell_apoptosis();
+            break;
+
+        case 0x01:  /* PHEROMONE_ANNOUNCE - Queen announcement */
+            /* Update Queen tracking */
+            if (data && len >= 2) {
+                const uint8_t *d = (const uint8_t*)data;
+                uint16_t queen_id = d[0] | (d[1] << 8);
+                if (queen_id != 0) {
+                    g_state.known_queen_id = queen_id;
+                    g_state.last_queen_seen = ticks;
+                    g_state.distance_to_queen = 1;  /* Direct from Queen */
+                }
+            }
+            break;
+
+        default:
+            /* Unknown pheromone - log for debugging */
+            serial_puts("[NERT] Unknown type 0x");
+            serial_put_hex(msg_type);
+            serial_puts(" from ");
+            serial_put_hex(sender_id);
+            serial_puts("\n");
+            break;
+    }
 }
 
 /* ==========================================================================
@@ -1200,21 +1292,60 @@ void cell_apoptosis(void) {
  * Pheromone Processing
  * ========================================================================== */
 void process_pheromone(struct nanos_pheromone* pkt) {
+    /* DEBUG: Show all packets entering process_pheromone */
+    if (pkt->type == 0xA0) {  /* PHEROMONE_TASK_ASSIGN */
+        vga_set_color(0x0E);  /* Yellow */
+        vga_puts("[DEBUG] TASK pkt: magic=0x");
+        vga_put_hex(pkt->magic);
+        vga_puts(" ver=");
+        vga_put_dec(pkt->version);
+        vga_puts(" from=0x");
+        vga_put_hex(pkt->node_id);
+        vga_puts("\n");
+        vga_set_color(0x0A);
+    }
+
     /* Validate magic and version */
-    if (pkt->magic != NANOS_MAGIC) return;
-    if (pkt->version != NANOS_VERSION && pkt->version != 0) {
+    if (pkt->magic != NANOS_MAGIC) {
+        if (pkt->type == 0xA0) {
+            vga_puts("[DEBUG] TASK dropped: bad magic\n");
+        }
+        return;
+    }
+    if (pkt->version != (NANOS_VERSION & 0xFF) && pkt->version != 0) {
         /* Incompatible version - quarantine */
+        if (pkt->type == 0xA0) {
+            vga_puts("[DEBUG] TASK dropped: bad version (");
+            vga_put_dec(pkt->version);
+            vga_puts(" vs ");
+            vga_put_dec(NANOS_VERSION & 0xFF);
+            vga_puts(")\n");
+        }
         return;
     }
 
     /* Don't process our own messages */
-    if (pkt->node_id == g_state.node_id) return;
+    if (pkt->node_id == g_state.node_id) {
+        if (pkt->type == 0xA0) {
+            vga_puts("[DEBUG] TASK dropped: own message\n");
+        }
+        return;
+    }
 
     /* Bloom filter deduplication - O(1) check */
-    if (!bloom_check_and_add(pkt)) {
-        /* Already seen this packet - skip processing */
-        g_state.packets_dropped++;
-        return;
+    /* SKIP bloom filter for TASK packets to ensure they get processed */
+    if (pkt->type != 0xA0) {
+        if (!bloom_check_and_add(pkt)) {
+            /* Already seen this packet - skip processing */
+            g_state.packets_dropped++;
+            return;
+        }
+    } else {
+        vga_puts("[DEBUG] TASK skipping bloom filter\n");
+    }
+
+    if (pkt->type == 0xA0) {
+        vga_puts("[DEBUG] TASK passed all checks, entering switch\n");
     }
 
     /* Security check for critical messages */
@@ -1424,6 +1555,18 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             process_result(pkt);
             break;
 
+        /* Task distribution from micrOS Queen (uses task_handler) */
+        case PHEROMONE_TASK_ASSIGN:
+            /* pkt->payload contains the task_payload struct */
+            serial_puts("[TASK] Received TASK_ASSIGN from 0x");
+            serial_put_hex(pkt->node_id);
+            serial_puts("\n");
+            vga_set_color(0x0D);  /* Magenta */
+            vga_puts(">> TASK from Queen\n");
+            vga_set_color(0x0A);
+            task_handler_process_pheromone((const struct task_payload*)pkt->payload);
+            break;
+
         case PHEROMONE_SENSOR:
             process_sensor(pkt);
             break;
@@ -1521,28 +1664,49 @@ void process_pheromone(struct nanos_pheromone* pkt) {
 /* ==========================================================================
  * Heartbeat Emission
  * ========================================================================== */
+
+/* Ethernet constants for heartbeat - must match micrOS */
+#define HB_ETH_ALEN         6
+#define HB_NERT_ETH_TYPE    0x4F4E
+
+/* NERT multicast MAC address - must match micrOS */
+static const uint8_t HB_MULTICAST_MAC[HB_ETH_ALEN] = {
+    0x01, 0x00, 0x5E, 0x4E, 0x45, 0x52
+};
+
 void emit_heartbeat(void) {
-    struct nanos_pheromone pkt;
+    /* Ethernet frame: 14 byte header + 64 byte pheromone */
+    uint8_t frame[14 + sizeof(struct nanos_pheromone)];
+    struct nanos_pheromone *pkt = (struct nanos_pheromone *)(frame + 14);
 
-    pkt.magic   = NANOS_MAGIC;
-    pkt.node_id = g_state.node_id;
-    pkt.type    = PHEROMONE_HELLO;
-    pkt.ttl     = 1;
-    pkt.flags   = 0;
-    pkt.version = NANOS_VERSION;
-    pkt.seq     = g_state.seq_counter++;
+    /* Build Ethernet header */
+    for (int i = 0; i < HB_ETH_ALEN; i++) {
+        frame[i] = HB_MULTICAST_MAC[i];  /* Destination: multicast */
+    }
+    e1000_get_mac(frame + HB_ETH_ALEN);  /* Source: our MAC */
+    frame[12] = (HB_NERT_ETH_TYPE >> 8) & 0xFF;  /* EtherType high byte */
+    frame[13] = HB_NERT_ETH_TYPE & 0xFF;         /* EtherType low byte */
 
-    PKT_SET_ROLE(&pkt, g_state.role);
+    /* Build pheromone */
+    pkt->magic   = NANOS_MAGIC;
+    pkt->node_id = g_state.node_id;
+    pkt->type    = PHEROMONE_HELLO;
+    pkt->ttl     = 1;
+    pkt->flags   = 0;
+    pkt->version = NANOS_VERSION;
+    pkt->seq     = g_state.seq_counter++;
+
+    PKT_SET_ROLE(pkt, g_state.role);
 
     /* Routing fields - propagate gradient */
-    pkt.dest_id = 0;  /* Broadcast */
-    pkt.distance = g_state.distance_to_queen;
-    pkt.hop_count = 0;
-    pkt.via_node_lo = g_state.gradient_via & 0xFF;
-    pkt.via_node_hi = (g_state.gradient_via >> 8) & 0xFF;
+    pkt->dest_id = 0;  /* Broadcast */
+    pkt->distance = g_state.distance_to_queen;
+    pkt->hop_count = 0;
+    pkt->via_node_lo = g_state.gradient_via & 0xFF;
+    pkt->via_node_hi = (g_state.gradient_via >> 8) & 0xFF;
 
     /* Stats in payload */
-    uint8_t* p = pkt.payload;
+    uint8_t* p = pkt->payload;
     *(uint32_t*)p = g_state.packets_rx; p += 4;
     *(uint32_t*)p = g_state.packets_tx; p += 4;
     *(uint32_t*)p = ticks;              p += 4;
@@ -1553,12 +1717,13 @@ void emit_heartbeat(void) {
     *p++ = g_state.neighbor_count;
 
     /* Zero HMAC for non-critical message */
-    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt.hmac[i] = 0;
+    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt->hmac[i] = 0;
 
     /* Propagate gradient before sending */
     gradient_propagate();
 
-    if (e1000_send(&pkt, sizeof(pkt)) == 0) {
+    /* Send complete Ethernet frame */
+    if (e1000_send(frame, sizeof(frame)) == 0) {
         g_state.packets_tx++;
     }
 
@@ -1589,14 +1754,56 @@ void nanos_loop(void) {
         /* Drain TX queue (non-blocking) */
         e1000_tx_drain();
 
-        /* Process incoming packets */
+        /* Process incoming packets (legacy raw pheromones) FIRST
+         * Must be before NERT processing because nert_process_incoming()
+         * consumes packets from e1000 queue and discards non-NERT packets.
+         * micrOS sends raw pheromones, not encrypted NERT packets. */
         while (e1000_has_packet()) {
             int len = e1000_receive(rx_buffer, sizeof(rx_buffer));
+
+            /* DEBUG: Show ALL received packets on VGA */
+            vga_set_color(0x0B);  /* Cyan */
+            vga_puts("[RX] len=");
+            vga_put_dec(len);
+
             if (len >= (int)(sizeof(struct eth_header) + sizeof(struct nanos_pheromone))) {
                 struct nanos_pheromone* pkt =
                     (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
+
+                vga_puts(" type=0x");
+                vga_put_hex(pkt->type);
+                vga_puts(" from=0x");
+                vga_put_hex(pkt->node_id);
+                vga_puts("\n");
+                vga_set_color(0x0A);
+
+                /* Also to serial */
+                serial_puts("[RX] len=");
+                serial_put_dec(len);
+                serial_puts(" type=0x");
+                serial_put_hex(pkt->type);
+                serial_puts(" from=0x");
+                serial_put_hex(pkt->node_id);
+                serial_puts("\n");
+
                 process_pheromone(pkt);
+            } else {
+                vga_puts(" (too small)\n");
+                vga_set_color(0x0A);
             }
+        }
+
+        /* NERT Protocol Processing (if enabled) */
+        if (g_nert_enabled) {
+            nert_hal_update_ticks();
+            /* NOTE: nert_process_incoming() disabled - it consumes packets
+             * and discards raw pheromones. micrOS uses raw format. */
+            /* nert_process_incoming(); */
+            nert_timer_tick();
+            nert_check_key_rotation();
+
+            /* Task handler periodic tick */
+            task_handler_tick();
         }
 
         /* Periodic metrics logging to serial (every 10 seconds) */
@@ -1737,6 +1944,30 @@ void kernel_main(uint32_t magic, void* mb_info) {
             if (i < 5) vga_putchar(':');
         }
         vga_puts("\n");
+
+        /* Initialize NERT Protocol Stack */
+        vga_puts("[*] Initializing NERT protocol...\n");
+        nert_hal_adapter_init(&g_nert_phy, (uint16_t)(g_state.node_id & 0xFFFF));
+        nert_init();
+
+        /* Master key must match micrOS Queen */
+        static const uint8_t master_key[32] = {
+            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+            0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE,
+            0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01,
+            0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
+        };
+        nert_set_master_key(master_key);
+        nert_set_receive_callback(nert_message_handler);
+
+        /* Initialize Task Handler */
+        task_handler_init((uint16_t)(g_state.node_id & 0xFFFF));
+
+        g_nert_enabled = 1;
+        vga_puts("[*] NERT protocol ready\n");
+        serial_puts("[NERT] Initialized with node_id=");
+        serial_put_hex(g_state.node_id);
+        serial_puts("\n");
     }
 
     /* Initialize state */

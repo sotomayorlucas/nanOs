@@ -135,4 +135,7 @@ uint8_t e1000_tx_queue_depth(void);  /* Current queue depth */
 uint32_t e1000_tx_dropped(void);     /* Packets dropped due to full queue */
 bool e1000_tx_queue_available(void); /* Is there space in queue? */
 
+/* Debug */
+void e1000_debug_status(void);       /* Print e1000 status registers */
+
 #endif /* E1000_H */

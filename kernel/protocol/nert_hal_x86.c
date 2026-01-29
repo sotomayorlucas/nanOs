@@ -8,23 +8,26 @@
 #include "nert.h"
 #include "e1000.h"
 #include "nanos.h"
+#include <string.h>
 
-/* External driver functions */
-extern int e1000_send(const void *data, uint16_t len);
-extern int e1000_receive(void *buffer, uint16_t max_len);
-extern void e1000_get_mac(uint8_t mac[6]);
-extern uint32_t pit_ticks;
+/* External state from kernel */
+extern volatile uint32_t ticks;
+extern struct nanos_state g_state;  /* For neighbor table */
 
 /* Local state */
 static uint16_t local_node_id = 0;
 static uint32_t rng_state = 0x12345678;
+
+/* Neighbor table for NERT multipath routing (references kernel's neighbor table) */
+uint8_t neighbor_count = 0;  /* Updated in nert_hal_update_ticks */
+struct neighbor_entry neighbors[NEIGHBOR_TABLE_SIZE];
 
 /* ============================================================================
  * Ethernet Frame Structure
  * ============================================================================ */
 
 #define ETH_ALEN            6
-#define ETH_TYPE_NERT       0x4E52  /* "NR" - NERT protocol */
+#define ETH_TYPE_NERT       0x4F4E  /* Must match micrOS NERT_ETH_TYPE */
 
 struct eth_frame {
     uint8_t  dst[ETH_ALEN];
@@ -102,12 +105,12 @@ int nert_hal_receive(void *buffer, uint16_t max_len) {
 }
 
 uint32_t nert_hal_get_ticks(void) {
-    return pit_ticks;
+    return ticks;
 }
 
 uint32_t nert_hal_random(void) {
     /* Mix in hardware entropy if available */
-    rng_state ^= pit_ticks;
+    rng_state ^= ticks;
     rng_state ^= (uint32_t)(uintptr_t)&rng_state; /* ASLR entropy */
     return xorshift32();
 }
@@ -134,11 +137,32 @@ uint16_t nert_hal_get_node_id(void) {
 
 void nert_hal_init(void) {
     /* Seed PRNG with entropy */
-    rng_state = pit_ticks ^ 0xDEADBEEF;
+    rng_state = ticks ^ 0xDEADBEEF;
     xorshift32(); /* Warm up */
     xorshift32();
     xorshift32();
 
     /* Pre-compute node ID */
     nert_hal_get_node_id();
+}
+
+/* ============================================================================
+ * HAL Adapter Interface (for compatibility with hal_adapter.h)
+ * ============================================================================ */
+
+/* PHY interface pointer (not used in x86 direct HAL, but needed for API) */
+static void *g_phy_interface = NULL;
+
+void nert_hal_adapter_init(void *phy, uint16_t node_id) {
+    g_phy_interface = phy;
+    local_node_id = node_id;
+    nert_hal_init();
+}
+
+void nert_hal_update_ticks(void) {
+    /* Sync neighbor table from kernel state for NERT multipath routing */
+    neighbor_count = g_state.neighbor_count;
+    for (int i = 0; i < NEIGHBOR_TABLE_SIZE && i < 16; i++) {
+        neighbors[i] = g_state.neighbors[i];
+    }
 }

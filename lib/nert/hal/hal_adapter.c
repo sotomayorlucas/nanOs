@@ -8,7 +8,6 @@
 
 #include "../nert_phy_if.h"
 #include "../../include/nert.h"
-#include <stdlib.h>
 #include <string.h>
 
 /* ============================================================================
@@ -99,32 +98,36 @@ uint16_t nert_hal_get_node_id(void) {
 }
 
 /* ============================================================================
- * Additional HAL stubs (for gossip/bloom filters)
+ * Additional HAL stubs (for NERT multipath routing)
  * ============================================================================ */
 
-/* Global state required by gossip.c and bloom.c */
-uint32_t ticks = 0;
-uint32_t g_state[4] = {0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210};
-
-/* Neighbor table for multipath routing (stub) */
-uint8_t neighbor_count = 0;
-struct neighbor_entry {
+/* Neighbor entry for multipath routing (internal NERT struct) */
+struct nert_neighbor_entry {
     uint32_t node_id;
     uint8_t  distance;
     uint16_t packets;
+    uint8_t  synaptic_weight;
 };
-struct neighbor_entry neighbors[16];
+
+/* Neighbor table for NERT routing (micrOS doesn't have one, so we provide stub) */
+uint8_t neighbor_count = 0;
+struct nert_neighbor_entry neighbors[16];
+
+/* RNG state for this module */
+static uint32_t adapter_g_state[4] = {0x12345678, 0x9ABCDEF0, 0xFEDCBA98, 0x76543210};
 
 /**
  * Update global tick counter
  * Should be called periodically (e.g., every timer tick)
  */
 void nert_hal_update_ticks(void) {
-    ticks = nert_hal_get_ticks();
+    /* Note: In kernel mode, ticks is already updated by the timer interrupt */
+    /* This function is called to keep adapter_g_state entropy pool mixed */
+    uint32_t t = nert_hal_get_ticks();
 
     /* Update RNG state */
-    g_state[0] ^= ticks;
-    g_state[1] = (g_state[1] << 7) ^ g_state[0];
-    g_state[2] = (g_state[2] >> 3) ^ g_state[1];
-    g_state[3] += g_state[2];
+    adapter_g_state[0] ^= t;
+    adapter_g_state[1] = (adapter_g_state[1] << 7) ^ adapter_g_state[0];
+    adapter_g_state[2] = (adapter_g_state[2] >> 3) ^ adapter_g_state[1];
+    adapter_g_state[3] += adapter_g_state[2];
 }

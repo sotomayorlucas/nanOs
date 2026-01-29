@@ -230,11 +230,18 @@ int e1000_init(void) {
 
     read_mac_from_eeprom();
 
+    /* Enable all multicast addresses (accept all multicast traffic) */
     for (int i = 0; i < 128; i++) {
-        e1000_write(E1000_MTA + (i * 4), 0);
+        e1000_write(E1000_MTA + (i * 4), 0xFFFFFFFF);
     }
 
-    e1000_write(E1000_IMC, 0xFFFFFFFF);
+    /* Clear pending interrupts by reading ICR */
+    (void)e1000_read(E1000_ICR);
+
+    /* Enable RX interrupt - QEMU e1000 needs this for RX DMA to work.
+     * Without IMS enabled, the e1000 hardware doesn't process incoming
+     * packets even in polling mode. */
+    e1000_write(E1000_IMS, 0x80);  /* RXT0 = bit 7 (Receiver Timer) */
 
     init_rx();
     init_tx();
@@ -300,37 +307,57 @@ static bool tx_hw_ready(void) {
 /* ==========================================================================
  * Send directly to hardware (internal)
  * Returns 0 on success, -1 if hardware busy
+ *
+ * Smart detection: If frame already has Ethernet header, send as-is.
+ * Otherwise, build header automatically.
  * ========================================================================== */
 static int tx_hw_send(uint8_t* data, uint16_t length) {
     if (!tx_hw_ready()) {
         return -1;  /* Hardware busy */
     }
 
-    /* Build Ethernet frame */
     uint8_t* buf = tx_buffers[tx_cur];
-    struct eth_header* eth = (struct eth_header*)buf;
+    uint16_t frame_length;
 
-    /* Broadcast destination */
-    eth->dst[0] = 0xFF; eth->dst[1] = 0xFF; eth->dst[2] = 0xFF;
-    eth->dst[3] = 0xFF; eth->dst[4] = 0xFF; eth->dst[5] = 0xFF;
+    /* Detect if Ethernet header already present */
+    /* Frame with header: 14 + 64 = 78 bytes minimum */
+    if (length >= 78) {
+        /* Frame already complete, copy as-is */
+        for (uint16_t i = 0; i < length; i++) {
+            buf[i] = data[i];
+        }
+        frame_length = length;
+    } else {
+        /* Build Ethernet frame */
+        struct eth_header* eth = (struct eth_header*)buf;
 
-    /* Source MAC */
-    for (int i = 0; i < 6; i++) {
-        eth->src[i] = e1000_mac[i];
+        /* Multicast MAC for NERT compatibility */
+        static const uint8_t NERT_MULTICAST[6] = {
+            0x01, 0x00, 0x5E, 0x4E, 0x45, 0x52
+        };
+        for (int i = 0; i < 6; i++) {
+            eth->dst[i] = NERT_MULTICAST[i];
+        }
+
+        /* Source MAC */
+        for (int i = 0; i < 6; i++) {
+            eth->src[i] = e1000_mac[i];
+        }
+
+        /* EtherType: 0x4F4E (NERT protocol, must match micrOS) */
+        eth->ethertype = __builtin_bswap16(0x4F4E);
+
+        /* Copy payload */
+        uint8_t* payload = buf + sizeof(struct eth_header);
+        for (uint16_t i = 0; i < length; i++) {
+            payload[i] = data[i];
+        }
+
+        frame_length = sizeof(struct eth_header) + length;
     }
 
-    eth->ethertype = ETH_TYPE_NANOS;
-
-    /* Copy payload */
-    uint8_t* payload = buf + sizeof(struct eth_header);
-    for (uint16_t i = 0; i < length; i++) {
-        payload[i] = data[i];
-    }
-
-    /* Calculate frame length (min 60 bytes) */
-    uint16_t frame_length = sizeof(struct eth_header) + length;
+    /* Pad to minimum frame size */
     if (frame_length < 60) {
-        /* Pad with zeros */
         for (uint16_t i = frame_length; i < 60; i++) {
             buf[i] = 0;
         }
@@ -434,4 +461,40 @@ uint32_t e1000_tx_dropped(void) {
  * ========================================================================== */
 bool e1000_tx_queue_available(void) {
     return tx_queue_count < TX_QUEUE_SIZE;
+}
+
+/* ==========================================================================
+ * Debug: Print e1000 status registers
+ * ========================================================================== */
+extern void serial_puts(const char *s);
+extern void serial_put_hex(uint32_t val);
+extern void serial_put_dec(uint32_t val);
+
+void e1000_debug_status(void) {
+    if (!e1000_initialized) {
+        serial_puts("[E1000] Not initialized\n");
+        return;
+    }
+
+    uint32_t status = e1000_read(E1000_STATUS);
+    uint32_t rctl = e1000_read(E1000_RCTL);
+    uint32_t rdh = e1000_read(E1000_RDH);
+    uint32_t rdt = e1000_read(E1000_RDT);
+    uint32_t ims = e1000_read(E1000_IMS);
+
+    serial_puts("[E1000] STATUS=0x");
+    serial_put_hex(status);
+    serial_puts(" RCTL=0x");
+    serial_put_hex(rctl);
+    serial_puts(" IMS=0x");
+    serial_put_hex(ims);
+    serial_puts("\n[E1000] RDH=");
+    serial_put_dec(rdh);
+    serial_puts(" RDT=");
+    serial_put_dec(rdt);
+    serial_puts(" rx_cur=");
+    serial_put_dec(rx_cur);
+    serial_puts(" desc[0].status=0x");
+    serial_put_hex(rx_descs[0].status);
+    serial_puts("\n");
 }

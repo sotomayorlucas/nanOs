@@ -18,12 +18,15 @@
 #endif
 
 /* Neighbor table structure (for multipath routing and Hebbian routing) */
+/* Note: This is an internal NERT struct - nanos.h defines a different one */
+#ifndef NANOS_H
 struct neighbor_entry {
     uint32_t node_id;
     uint8_t  distance;
     uint16_t packets;
     uint8_t  synaptic_weight;   /* Hebbian weight (0-255), initial: 128 */
 };
+#endif
 
 /* ============================================================================
  * Internal State
