@@ -265,6 +265,30 @@ Cells die and rebirth when:
 
 On death: emit REBIRTH, reset heap, new ID, re-roll role.
 
+## Documentation
+
+### Getting Started
+- **[Getting Started Guide](GETTING_STARTED.md)** - Step-by-step tutorial for beginners
+- **[README en Español](README.es.md)** - Spanish version of this README
+
+### Core Documentation
+- **[Architecture](ARCHITECTURE.md)** - Detailed system architecture and design
+- **[API Reference](API.md)** - Complete API documentation
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to NanOS
+- **[Changelog](CHANGELOG.md)** - Version history and release notes
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community guidelines
+
+### Platform-Specific
+- **[Embedded Platforms](EMBEDDED.md)** - ESP32, RP2040, STM32, LoRa support
+
+### Technical Specifications
+- **[Protocol Specification](docs/PROTOCOL_EPHEMERAL_RELIABLE_TRANSPORT.md)** - NERT protocol details
+- **[RFC-NERT-001](docs/RFC-NERT-001.txt)** - Formal NERT protocol RFC
+- **[Threat Model](docs/THREAT_MODEL.md)** - Security analysis and threat assessment
+- **[Migration Guide](docs/MIGRATION_v0.4.md)** - Upgrading from v0.3 to v0.4
+- **[Security Fix](docs/SECURITY_FIX_FORWARD_SECRECY.md)** - Forward secrecy implementation
+- **[Technical Manual](docs/manual/NanOS_Technical_Manual.pdf)** - Complete LaTeX manual (4400+ lines)
+
 ## License
 
 Public domain. Use it, break it, evolve it.
