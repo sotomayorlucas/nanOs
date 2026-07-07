@@ -1292,6 +1292,7 @@ void cell_apoptosis(void) {
  * Pheromone Processing
  * ========================================================================== */
 void process_pheromone(struct nanos_pheromone* pkt) {
+#if NANOS_DEBUG
     /* DEBUG: Show all packets entering process_pheromone */
     if (pkt->type == 0xA0) {  /* PHEROMONE_TASK_ASSIGN */
         vga_set_color(0x0E);  /* Yellow */
@@ -1304,16 +1305,20 @@ void process_pheromone(struct nanos_pheromone* pkt) {
         vga_puts("\n");
         vga_set_color(0x0A);
     }
+#endif
 
     /* Validate magic and version */
     if (pkt->magic != NANOS_MAGIC) {
+#if NANOS_DEBUG
         if (pkt->type == 0xA0) {
             vga_puts("[DEBUG] TASK dropped: bad magic\n");
         }
+#endif
         return;
     }
     if (pkt->version != (NANOS_VERSION & 0xFF) && pkt->version != 0) {
         /* Incompatible version - quarantine */
+#if NANOS_DEBUG
         if (pkt->type == 0xA0) {
             vga_puts("[DEBUG] TASK dropped: bad version (");
             vga_put_dec(pkt->version);
@@ -1321,14 +1326,17 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             vga_put_dec(NANOS_VERSION & 0xFF);
             vga_puts(")\n");
         }
+#endif
         return;
     }
 
     /* Don't process our own messages */
     if (pkt->node_id == g_state.node_id) {
+#if NANOS_DEBUG
         if (pkt->type == 0xA0) {
             vga_puts("[DEBUG] TASK dropped: own message\n");
         }
+#endif
         return;
     }
 
@@ -1340,13 +1348,13 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             g_state.packets_dropped++;
             return;
         }
-    } else {
-        vga_puts("[DEBUG] TASK skipping bloom filter\n");
     }
 
+#if NANOS_DEBUG
     if (pkt->type == 0xA0) {
-        vga_puts("[DEBUG] TASK passed all checks, entering switch\n");
+        vga_puts("[DEBUG] TASK skipping bloom filter, entering switch\n");
     }
+#endif
 
     /* Security check for critical messages */
     if (is_authenticated_type(pkt->type)) {
@@ -1761,23 +1769,11 @@ void nanos_loop(void) {
         while (e1000_has_packet()) {
             int len = e1000_receive(rx_buffer, sizeof(rx_buffer));
 
-            /* DEBUG: Show ALL received packets on VGA */
-            vga_set_color(0x0B);  /* Cyan */
-            vga_puts("[RX] len=");
-            vga_put_dec(len);
-
             if (len >= (int)(sizeof(struct eth_header) + sizeof(struct nanos_pheromone))) {
                 struct nanos_pheromone* pkt =
                     (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
 
-                vga_puts(" type=0x");
-                vga_put_hex(pkt->type);
-                vga_puts(" from=0x");
-                vga_put_hex(pkt->node_id);
-                vga_puts("\n");
-                vga_set_color(0x0A);
-
-                /* Also to serial */
+#if NANOS_DEBUG
                 serial_puts("[RX] len=");
                 serial_put_dec(len);
                 serial_puts(" type=0x");
@@ -1785,11 +1781,9 @@ void nanos_loop(void) {
                 serial_puts(" from=0x");
                 serial_put_hex(pkt->node_id);
                 serial_puts("\n");
+#endif
 
                 process_pheromone(pkt);
-            } else {
-                vga_puts(" (too small)\n");
-                vga_set_color(0x0A);
             }
         }
 

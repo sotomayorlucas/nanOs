@@ -40,6 +40,12 @@ typedef _Bool              bool;
 #define MULTIBOOT2_MAGIC    0x36D76289
 #define NANOS_VERSION       0x0006      /* Protocol version 0.6 */
 
+/* Verbose per-packet / per-task tracing to VGA + serial. Off by default;
+ * set to 1 to debug the RX path and the micrOS task pipeline. */
+#ifndef NANOS_DEBUG
+#define NANOS_DEBUG         0
+#endif
+
 /* ==========================================================================
  * Pheromone Types - Extended language
  * ========================================================================== */

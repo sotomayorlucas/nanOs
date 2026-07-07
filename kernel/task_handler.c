@@ -14,6 +14,19 @@
 #include <nanos.h>
 #include <string.h>
 
+/* All serial output in this file is per-task tracing. Route it through the
+ * NANOS_DEBUG gate so a disposable worker stays quiet by default; the Queen
+ * aggregates and reports results either way. */
+#if NANOS_DEBUG
+#define dbg_puts(s)    serial_puts(s)
+#define dbg_dec(n)     serial_put_dec(n)
+#define dbg_hex(n)     serial_put_hex(n)
+#else
+#define dbg_puts(s)    ((void)0)
+#define dbg_dec(n)     ((void)0)
+#define dbg_hex(n)     ((void)0)
+#endif
+
 /* External kernel state and functions */
 extern struct nanos_state g_state;
 extern volatile uint32_t ticks;
@@ -221,11 +234,11 @@ uint32_t task_compute_gcd(uint32_t a, uint32_t b) {
  * Execute a task and store result
  */
 static void task_execute(struct worker_task *task) {
-    serial_puts("[TASK_EXEC] Executing task type=");
-    serial_put_dec(task->task_type);
-    serial_puts(" input=");
-    serial_put_dec(task->input);
-    serial_puts("\n");
+    dbg_puts("[TASK_EXEC] Executing task type=");
+    dbg_dec(task->task_type);
+    dbg_puts(" input=");
+    dbg_dec(task->input);
+    dbg_puts("\n");
 
     task->status = TASK_STATUS_RUNNING;
     task->started_tick = nert_get_ticks();
@@ -235,11 +248,11 @@ static void task_execute(struct worker_task *task) {
         case TASK_TYPE_PRIME_CHECK:
             task->result = task_compute_prime(task->input);
             task->status = TASK_STATUS_COMPLETE;
-            serial_puts("[TASK_EXEC] Prime(");
-            serial_put_dec(task->input);
-            serial_puts(") = ");
-            serial_put_dec(task->result);
-            serial_puts("\n");
+            dbg_puts("[TASK_EXEC] Prime(");
+            dbg_dec(task->input);
+            dbg_puts(") = ");
+            dbg_dec(task->result);
+            dbg_puts("\n");
             break;
 
         case TASK_TYPE_FACTORIAL:
@@ -288,13 +301,13 @@ static void task_execute(struct worker_task *task) {
  * Send task result to Queen
  */
 static void task_send_result(struct worker_task *task) {
-    serial_puts("[TASK_RESULT] Sending result: task_id=");
-    serial_put_dec(task->task_id);
-    serial_puts(" result=");
-    serial_put_dec(task->result);
-    serial_puts(" status=");
-    serial_put_dec(task->status);
-    serial_puts("\n");
+    dbg_puts("[TASK_RESULT] Sending result: task_id=");
+    dbg_dec(task->task_id);
+    dbg_puts(" result=");
+    dbg_dec(task->result);
+    dbg_puts(" status=");
+    dbg_dec(task->status);
+    dbg_puts("\n");
 
     struct task_result_payload result;
     memset(&result, 0, sizeof(result));
@@ -316,7 +329,7 @@ static void task_send_result(struct worker_task *task) {
     result.checksum = task_calc_crc16(&result, sizeof(result) - sizeof(result.padding) - 2);
 
     /* Send via NERT */
-    serial_puts("[TASK_RESULT] Calling nert_send_pheromone(0xA1)\n");
+    dbg_puts("[TASK_RESULT] Calling nert_send_pheromone(0xA1)\n");
     nert_send_pheromone(PHEROMONE_TASK_RESULT, &result, sizeof(result));
 
     /* Update statistics */
@@ -374,39 +387,39 @@ void task_handler_init(uint16_t node_id) {
 }
 
 void task_handler_process_pheromone(const struct task_payload *payload) {
-    serial_puts("[TASK_HANDLER] process_pheromone called\n");
+    dbg_puts("[TASK_HANDLER] process_pheromone called\n");
 
     if (!g_task_handler.initialized) {
-        serial_puts("[TASK_HANDLER] ERROR: not initialized!\n");
+        dbg_puts("[TASK_HANDLER] ERROR: not initialized!\n");
         return;
     }
 
     /* Validate checksum */
     uint16_t calc_checksum = task_calc_crc16(payload,
         sizeof(*payload) - sizeof(payload->padding) - 2);
-    serial_puts("[TASK_HANDLER] checksum: calc=0x");
-    serial_put_hex(calc_checksum);
-    serial_puts(" pkt=0x");
-    serial_put_hex(payload->checksum);
-    serial_puts(" cmd=0x");
-    serial_put_hex(payload->command);
-    serial_puts("\n");
+    dbg_puts("[TASK_HANDLER] checksum: calc=0x");
+    dbg_hex(calc_checksum);
+    dbg_puts(" pkt=0x");
+    dbg_hex(payload->checksum);
+    dbg_puts(" cmd=0x");
+    dbg_hex(payload->command);
+    dbg_puts("\n");
 
     if (calc_checksum != payload->checksum) {
         /* Invalid checksum - ignore */
-        serial_puts("[TASK_HANDLER] ERROR: checksum mismatch!\n");
+        dbg_puts("[TASK_HANDLER] ERROR: checksum mismatch!\n");
         return;
     }
 
-    serial_puts("[TASK_HANDLER] checksum OK, processing command\n");
+    dbg_puts("[TASK_HANDLER] checksum OK, processing command\n");
 
     switch (payload->command) {
         case TASK_CMD_ASSIGN: {
-            serial_puts("[TASK_HANDLER] TASK_CMD_ASSIGN: type=");
-            serial_put_dec(payload->task_type);
-            serial_puts(" input=");
-            serial_put_dec(payload->input);
-            serial_puts("\n");
+            dbg_puts("[TASK_HANDLER] TASK_CMD_ASSIGN: type=");
+            dbg_dec(payload->task_type);
+            dbg_puts(" input=");
+            dbg_dec(payload->input);
+            dbg_puts("\n");
             /* Find a free slot */
             struct worker_task *task = task_find_free_slot();
             if (!task) {
