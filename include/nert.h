@@ -67,8 +67,8 @@ extern "C" {
 /*
  * Phase 5: shared pre-shared key (PSK) for the encrypted NERT link -- the SINGLE
  * source of truth, baked into swarm_master_key (nert.c) and used by every node.
- * All nodes MUST share it. This is a WEAK, demo-grade secret (ChaCha8, no key
- * provisioning); override at build time with
+ * All nodes MUST share it. This is a WEAK, demo-grade secret (real RFC 8439
+ * ChaCha20-Poly1305 cipher, but no key provisioning); override at build time with
  *   -DNERT_MASTER_KEY_INIT='{0x..,0x..,... 32 bytes ...}'
  * to re-key the whole swarm. Real key management (KDF/provisioning) is out of
  * scope for this project.
@@ -82,10 +82,10 @@ extern "C" {
 #endif
 
 /* Crypto constants */
-#define NERT_CHACHA_ROUNDS          8
+#define NERT_CHACHA_ROUNDS          20
 #define NERT_KEY_SIZE               32
 #define NERT_NONCE_SIZE             12
-#define NERT_MAC_SIZE               8
+#define NERT_MAC_SIZE               16
 
 /* FEC constants */
 #define NERT_FEC_DATA_SHARDS        4
@@ -1236,23 +1236,62 @@ void nert_debug_packet(const char *prefix, const struct nert_packet *pkt);
  * ---------------------------------------------------------------------------- */
 
 /**
- * Run ChaCha8 self-test with known test vectors
- * @return 0 on success, -1 on failure
- */
-int chacha8_self_test(void);
-
-/**
- * Run Poly1305 self-test
- * @return 0 on success, -1 on failure
- */
-int poly1305_self_test(void);
-
-/**
- * Run all crypto self-tests (ChaCha8 + Poly1305)
+ * Run all crypto self-tests (RFC 8439 ChaCha20, Poly1305, AEAD KATs)
  * Called automatically during nert_init()
  * @return 0 on all tests pass, -1 on any failure
  */
 int nert_crypto_self_test(void);
+
+/* ----------------------------------------------------------------------------
+ * Crypto Primitives (Internal, shared with lib/nert/nert_security.c and
+ * micrOs/distributed/nert/nert_hal_micros.c)
+ * ---------------------------------------------------------------------------- */
+
+/**
+ * ChaCha20 (RFC 8439) stream cipher, counter starts at 0.
+ * Kept for existing callers (KDF, manual rekey, micrOs HAL round-trip check).
+ */
+void nert_chacha20_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                     const uint8_t *plaintext, uint8_t len,
+                     uint8_t *ciphertext);
+
+/**
+ * ChaCha20 (RFC 8439) stream cipher with an explicit starting counter.
+ */
+void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t counter,
+                  const uint8_t *in, uint32_t len, uint8_t *out);
+
+/**
+ * Poly1305 (RFC 8439) one-time authenticator, 16-byte tag.
+ */
+void poly1305_mac(const uint8_t otk[32], const uint8_t *msg, uint32_t msg_len,
+                  uint8_t tag[16]);
+
+/**
+ * Poly1305 (RFC 8439) constant-time tag verification.
+ * @return 0 if the tag matches, -1 otherwise.
+ */
+int poly1305_verify(const uint8_t otk[32], const uint8_t *msg, uint32_t msg_len,
+                    const uint8_t tag[16]);
+
+/**
+ * RFC 8439 ChaCha20-Poly1305 AEAD seal.
+ * otk = ChaCha20(key,nonce,ctr=0); ct = ChaCha20(key,nonce,ctr=1..) ^ pt;
+ * tag = Poly1305(otk, AAD||pad16||ct||pad16||le64(aad_len)||le64(pt_len)).
+ */
+void nert_aead_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                       const uint8_t *aad, uint32_t aad_len,
+                       const uint8_t *pt, uint32_t pt_len,
+                       uint8_t *ct, uint8_t tag[16]);
+
+/**
+ * RFC 8439 ChaCha20-Poly1305 AEAD open.
+ * @return 0 on success (pt populated), -1 on authentication failure (pt untouched).
+ */
+int nert_aead_decrypt(const uint8_t key[32], const uint8_t nonce[12],
+                      const uint8_t *aad, uint32_t aad_len,
+                      const uint8_t *ct, uint32_t ct_len,
+                      uint8_t *pt, const uint8_t tag[16]);
 
 /* ============================================================================
  * HAL Interface (to be implemented per platform)

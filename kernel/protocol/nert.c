@@ -201,7 +201,7 @@ static struct nert_cover_config cover_config = {
 };
 
 /* ============================================================================
- * ChaCha8 Implementation (lightweight crypto)
+ * ChaCha20 Implementation (RFC 8439)
  * ============================================================================ */
 
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
@@ -212,8 +212,11 @@ static struct nert_cover_config cover_config = {
     a += b; d ^= a; d = ROTL32(d, 8);  \
     c += d; b ^= c; b = ROTL32(b, 7);
 
-static void chacha8_block(const uint32_t key[8], const uint32_t nonce[3],
-                          uint32_t counter, uint8_t output[64]) {
+/* Little-endian 32-bit load, the convention used throughout this file. */
+#define U8TO32LE(p) ((uint32_t)(p)[0] | ((uint32_t)(p)[1]<<8) | ((uint32_t)(p)[2]<<16) | ((uint32_t)(p)[3]<<24))
+
+static void chacha20_block(const uint32_t key[8], const uint32_t nonce[3],
+                           uint32_t counter, uint8_t output[64]) {
     uint32_t state[16];
 
     /* ChaCha constants "expand 32-byte k" */
@@ -237,8 +240,8 @@ static void chacha8_block(const uint32_t key[8], const uint32_t nonce[3],
     uint32_t working[16];
     memcpy(working, state, 64);
 
-    /* 8 rounds (4 double rounds) */
-    for (int i = 0; i < 4; i++) {
+    /* 20 rounds (10 double rounds) */
+    for (int i = 0; i < 10; i++) {
         /* Column round */
         QUARTERROUND(working[0], working[4], working[8],  working[12]);
         QUARTERROUND(working[1], working[5], working[9],  working[13]);
@@ -266,114 +269,189 @@ static void chacha8_block(const uint32_t key[8], const uint32_t nonce[3],
     }
 }
 
-/* Non-static for use by nert_security.c (key rotation encryption) */
-void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
-                     const uint8_t *plaintext, uint8_t len,
-                     uint8_t *ciphertext) {
-    uint32_t key32[8];
-    uint32_t nonce32[3];
+/* Non-static: counter-aware core, used by nert_chacha20_encrypt and the AEAD. */
+void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t counter,
+                  const uint8_t *in, uint32_t len, uint8_t *out) {
+    uint32_t key32[8], nonce32[3];
     uint8_t keystream[64];
-    uint32_t counter = 0;
-
-    /* Convert key to 32-bit words (little-endian) */
-    for (int i = 0; i < 8; i++) {
-        key32[i] = (uint32_t)key[i * 4 + 0] |
-                   ((uint32_t)key[i * 4 + 1] << 8) |
-                   ((uint32_t)key[i * 4 + 2] << 16) |
-                   ((uint32_t)key[i * 4 + 3] << 24);
-    }
-
-    /* Convert nonce to 32-bit words */
-    for (int i = 0; i < 3; i++) {
-        nonce32[i] = nonce[i * 4 + 0] |
-                     (nonce[i * 4 + 1] << 8) |
-                     (nonce[i * 4 + 2] << 16) |
-                     (nonce[i * 4 + 3] << 24);
-    }
-
-    /* Encrypt in 64-byte blocks */
-    uint8_t offset = 0;
-    while (offset < len) {
-        chacha8_block(key32, nonce32, counter, keystream);
+    for (int i = 0; i < 8; i++)
+        key32[i] = (uint32_t)key[i*4] | ((uint32_t)key[i*4+1]<<8) |
+                   ((uint32_t)key[i*4+2]<<16) | ((uint32_t)key[i*4+3]<<24);
+    for (int i = 0; i < 3; i++)
+        nonce32[i] = (uint32_t)nonce[i*4] | ((uint32_t)nonce[i*4+1]<<8) |
+                     ((uint32_t)nonce[i*4+2]<<16) | ((uint32_t)nonce[i*4+3]<<24);
+    uint32_t off = 0;
+    while (off < len) {
+        chacha20_block(key32, nonce32, counter, keystream);
         counter++;
-
-        uint8_t block_len = (len - offset > 64) ? 64 : (len - offset);
-        for (uint8_t i = 0; i < block_len; i++) {
-            ciphertext[offset + i] = plaintext[offset + i] ^ keystream[i];
-        }
-        offset += block_len;
+        uint32_t bl = (len - off > 64) ? 64 : (len - off);
+        for (uint32_t i = 0; i < bl; i++) out[off+i] = in[off+i] ^ keystream[i];
+        off += bl;
     }
+    volatile uint8_t *vks = keystream; for (int i=0;i<64;i++) vks[i]=0;
+    volatile uint32_t *vk = key32; for (int i=0;i<8;i++) vk[i]=0;
+}
 
-    /* Secure cleanup: zero sensitive key material
-     * Use volatile pointers to prevent compiler optimization */
-    volatile uint8_t *vks = (volatile uint8_t *)keystream;
-    volatile uint32_t *vkey = (volatile uint32_t *)key32;
-    for (int i = 0; i < 64; i++) vks[i] = 0;
-    for (int i = 0; i < 8; i++) vkey[i] = 0;
+/* Non-static for use by nert_security.c (key rotation encryption), the KDF,
+ * and micrOs's HAL round-trip check. Counter fixed at 0 (matches the old
+ * chacha8_encrypt shape used by every non-AEAD caller). */
+void nert_chacha20_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                      const uint8_t *plaintext, uint8_t len,
+                      uint8_t *ciphertext) {
+    chacha20_xor(key, nonce, 0, plaintext, len, ciphertext);
 }
 
 /* ============================================================================
- * Poly1305 MAC Implementation (simplified)
+ * Poly1305 MAC Implementation (RFC 8439, 130-bit, poly1305-donna 32-bit)
  * ============================================================================ */
 
-/* Poly1305 uses 130-bit arithmetic - simplified for embedded */
-/* Non-static for use by nert_security.c (key rotation signing) */
-void poly1305_mac(const uint8_t key[32],
-                  const uint8_t *message, uint8_t msg_len,
-                  const uint8_t *aad, uint8_t aad_len,
-                  uint8_t tag[NERT_MAC_SIZE]) {
-    /*
-     * Simplified Poly1305: Use lower 64 bits of result
-     * Full implementation would need 130-bit math
-     */
-    uint64_t r = 0, s = 0;
-    uint64_t acc = 0;
+#define U32TO8LE(p,v) do { (p)[0]=(uint8_t)(v); (p)[1]=(uint8_t)((v)>>8); \
+                           (p)[2]=(uint8_t)((v)>>16); (p)[3]=(uint8_t)((v)>>24); } while(0)
 
-    /* Extract r and s from key */
-    for (int i = 0; i < 8; i++) {
-        r |= ((uint64_t)key[i]) << (i * 8);
-        s |= ((uint64_t)key[16 + i]) << (i * 8);
+/* Non-static for use by nert_security.c (key rotation signing) and the AEAD.
+ * otk is the one-time (r||s) key; msg_len may exceed 255 (AEAD data). */
+void poly1305_mac(const uint8_t otk[32], const uint8_t *m, uint32_t bytes, uint8_t mac[16]) {
+    uint32_t r0,r1,r2,r3,r4, s1,s2,s3,s4;
+    uint32_t h0=0,h1=0,h2=0,h3=0,h4=0, c;
+    uint64_t d0,d1,d2,d3,d4;
+    uint32_t g0,g1,g2,g3,g4; uint64_t f; uint32_t mask;
+
+    r0 = (U8TO32LE(&otk[ 0])     ) & 0x3ffffff;
+    r1 = (U8TO32LE(&otk[ 3]) >> 2) & 0x3ffff03;
+    r2 = (U8TO32LE(&otk[ 6]) >> 4) & 0x3ffc0ff;
+    r3 = (U8TO32LE(&otk[ 9]) >> 6) & 0x3f03fff;
+    r4 = (U8TO32LE(&otk[12]) >> 8) & 0x00fffff;
+    s1 = r1*5; s2 = r2*5; s3 = r3*5; s4 = r4*5;
+
+    while (bytes >= 16) {
+        h0 += (U8TO32LE(&m[ 0])     ) & 0x3ffffff;
+        h1 += (U8TO32LE(&m[ 3]) >> 2) & 0x3ffffff;
+        h2 += (U8TO32LE(&m[ 6]) >> 4) & 0x3ffffff;
+        h3 += (U8TO32LE(&m[ 9]) >> 6) & 0x3ffffff;
+        h4 += (U8TO32LE(&m[12]) >> 8) | (1u << 24);
+        d0 = (uint64_t)h0*r0 + (uint64_t)h1*s4 + (uint64_t)h2*s3 + (uint64_t)h3*s2 + (uint64_t)h4*s1;
+        d1 = (uint64_t)h0*r1 + (uint64_t)h1*r0 + (uint64_t)h2*s4 + (uint64_t)h3*s3 + (uint64_t)h4*s2;
+        d2 = (uint64_t)h0*r2 + (uint64_t)h1*r1 + (uint64_t)h2*r0 + (uint64_t)h3*s4 + (uint64_t)h4*s3;
+        d3 = (uint64_t)h0*r3 + (uint64_t)h1*r2 + (uint64_t)h2*r1 + (uint64_t)h3*r0 + (uint64_t)h4*s4;
+        d4 = (uint64_t)h0*r4 + (uint64_t)h1*r3 + (uint64_t)h2*r2 + (uint64_t)h3*r1 + (uint64_t)h4*r0;
+        c = (uint32_t)(d0>>26); h0 = (uint32_t)d0 & 0x3ffffff;
+        d1 += c; c = (uint32_t)(d1>>26); h1 = (uint32_t)d1 & 0x3ffffff;
+        d2 += c; c = (uint32_t)(d2>>26); h2 = (uint32_t)d2 & 0x3ffffff;
+        d3 += c; c = (uint32_t)(d3>>26); h3 = (uint32_t)d3 & 0x3ffffff;
+        d4 += c; c = (uint32_t)(d4>>26); h4 = (uint32_t)d4 & 0x3ffffff;
+        h0 += c*5; c = h0>>26; h0 &= 0x3ffffff; h1 += c;
+        m += 16; bytes -= 16;
     }
-
-    /* Clamp r */
-    r &= 0x0FFFFFFC0FFFFFFCULL;
-
-    /* Process AAD */
-    for (uint8_t i = 0; i < aad_len; i++) {
-        acc += aad[i];
-        acc = (acc * r) ^ s;
+    if (bytes) {
+        uint8_t b[16]; uint32_t i;
+        for (i=0;i<bytes;i++) b[i]=m[i];
+        b[i++]=1; for (;i<16;i++) b[i]=0;
+        h0 += (U8TO32LE(&b[ 0])     ) & 0x3ffffff;
+        h1 += (U8TO32LE(&b[ 3]) >> 2) & 0x3ffffff;
+        h2 += (U8TO32LE(&b[ 6]) >> 4) & 0x3ffffff;
+        h3 += (U8TO32LE(&b[ 9]) >> 6) & 0x3ffffff;
+        h4 += (U8TO32LE(&b[12]) >> 8);
+        d0 = (uint64_t)h0*r0 + (uint64_t)h1*s4 + (uint64_t)h2*s3 + (uint64_t)h3*s2 + (uint64_t)h4*s1;
+        d1 = (uint64_t)h0*r1 + (uint64_t)h1*r0 + (uint64_t)h2*s4 + (uint64_t)h3*s3 + (uint64_t)h4*s2;
+        d2 = (uint64_t)h0*r2 + (uint64_t)h1*r1 + (uint64_t)h2*r0 + (uint64_t)h3*s4 + (uint64_t)h4*s3;
+        d3 = (uint64_t)h0*r3 + (uint64_t)h1*r2 + (uint64_t)h2*r1 + (uint64_t)h3*r0 + (uint64_t)h4*s4;
+        d4 = (uint64_t)h0*r4 + (uint64_t)h1*r3 + (uint64_t)h2*r2 + (uint64_t)h3*r1 + (uint64_t)h4*r0;
+        c = (uint32_t)(d0>>26); h0 = (uint32_t)d0 & 0x3ffffff;
+        d1 += c; c = (uint32_t)(d1>>26); h1 = (uint32_t)d1 & 0x3ffffff;
+        d2 += c; c = (uint32_t)(d2>>26); h2 = (uint32_t)d2 & 0x3ffffff;
+        d3 += c; c = (uint32_t)(d3>>26); h3 = (uint32_t)d3 & 0x3ffffff;
+        d4 += c; c = (uint32_t)(d4>>26); h4 = (uint32_t)d4 & 0x3ffffff;
+        h0 += c*5; c = h0>>26; h0 &= 0x3ffffff; h1 += c;
     }
-
-    /* Process message */
-    for (uint8_t i = 0; i < msg_len; i++) {
-        acc += message[i];
-        acc = (acc * r) ^ s;
-    }
-
-    /* Finalize */
-    acc += s;
-
-    /* Output truncated tag */
-    for (int i = 0; i < NERT_MAC_SIZE; i++) {
-        tag[i] = (acc >> (i * 8)) & 0xFF;
-    }
+    /* fully carry h */
+    c = h1>>26; h1 &= 0x3ffffff; h2 += c; c = h2>>26; h2 &= 0x3ffffff;
+    h3 += c; c = h3>>26; h3 &= 0x3ffffff; h4 += c; c = h4>>26; h4 &= 0x3ffffff;
+    h0 += c*5; c = h0>>26; h0 &= 0x3ffffff; h1 += c;
+    /* compute h - p */
+    g0 = h0+5; c = g0>>26; g0 &= 0x3ffffff;
+    g1 = h1+c; c = g1>>26; g1 &= 0x3ffffff;
+    g2 = h2+c; c = g2>>26; g2 &= 0x3ffffff;
+    g3 = h3+c; c = g3>>26; g3 &= 0x3ffffff;
+    g4 = h4+c-(1u<<26);
+    /* select h if h<p else h-p (constant time) */
+    mask = (g4>>31)-1;
+    g0 &= mask; g1 &= mask; g2 &= mask; g3 &= mask; g4 &= mask;
+    mask = ~mask;
+    h0 = (h0&mask)|g0; h1 = (h1&mask)|g1; h2 = (h2&mask)|g2; h3 = (h3&mask)|g3; h4 = (h4&mask)|g4;
+    /* h = h % 2^128 */
+    h0 = (h0    ) | (h1<<26);
+    h1 = (h1>> 6) | (h2<<20);
+    h2 = (h2>>12) | (h3<<14);
+    h3 = (h3>>18) | (h4<< 8);
+    /* mac = (h + s) % 2^128 */
+    f = (uint64_t)h0 + U8TO32LE(&otk[16]);              h0=(uint32_t)f;
+    f = (uint64_t)h1 + U8TO32LE(&otk[20]) + (f>>32);    h1=(uint32_t)f;
+    f = (uint64_t)h2 + U8TO32LE(&otk[24]) + (f>>32);    h2=(uint32_t)f;
+    f = (uint64_t)h3 + U8TO32LE(&otk[28]) + (f>>32);    h3=(uint32_t)f;
+    U32TO8LE(&mac[ 0],h0); U32TO8LE(&mac[ 4],h1); U32TO8LE(&mac[ 8],h2); U32TO8LE(&mac[12],h3);
 }
 
-/* Non-static for use by nert_security.c (key rotation verification) */
-int poly1305_verify(const uint8_t key[32],
-                    const uint8_t *message, uint8_t msg_len,
-                    const uint8_t *aad, uint8_t aad_len,
-                    const uint8_t expected_tag[NERT_MAC_SIZE]) {
-    uint8_t computed_tag[NERT_MAC_SIZE];
-    poly1305_mac(key, message, msg_len, aad, aad_len, computed_tag);
-
-    /* Constant-time comparison */
+/* Non-static for use by nert_security.c (key rotation verification) and the AEAD. */
+int poly1305_verify(const uint8_t otk[32], const uint8_t *msg, uint32_t msg_len,
+                    const uint8_t tag[16]) {
+    uint8_t computed[16];
+    poly1305_mac(otk, msg, msg_len, computed);
     uint8_t diff = 0;
-    for (int i = 0; i < NERT_MAC_SIZE; i++) {
-        diff |= computed_tag[i] ^ expected_tag[i];
-    }
-
+    for (int i = 0; i < 16; i++) diff |= computed[i] ^ tag[i];
     return (diff == 0) ? 0 : -1;
+}
+
+/* ============================================================================
+ * ChaCha20-Poly1305 AEAD (RFC 8439 Section 2.8)
+ * ============================================================================ */
+
+static void poly1305_key_gen(const uint8_t key[32], const uint8_t nonce[12], uint8_t otk[32]) {
+    uint32_t k32[8], n32[3]; uint8_t blk[64];
+    for (int i=0;i<8;i++) k32[i]=U8TO32LE(&key[i*4]);
+    for (int i=0;i<3;i++) n32[i]=U8TO32LE(&nonce[i*4]);
+    chacha20_block(k32, n32, 0, blk);         /* counter 0 */
+    memcpy(otk, blk, 32);
+    volatile uint8_t *v = blk; for (int i=0;i<64;i++) v[i]=0;
+}
+
+/* Poly1305 over AAD||pad16||CT||pad16||le64(aad_len)||le64(ct_len).
+ * mac_data sized for the worst case: NERT_HEADER_SIZE (<=20 bytes of AAD) +
+ * NERT_MAX_PAYLOAD ciphertext + two 16-byte pad regions + 16 bytes of lengths. */
+static void aead_tag(const uint8_t otk[32], const uint8_t *aad, uint32_t aad_len,
+                     const uint8_t *ct, uint32_t ct_len, uint8_t tag[16]) {
+    uint8_t mac_data[NERT_HEADER_SIZE + 16 + NERT_MAX_PAYLOAD + 16 + 16];
+    uint32_t o = 0;
+    memcpy(mac_data+o, aad, aad_len); o += aad_len;
+    while (o % 16) mac_data[o++] = 0;
+    memcpy(mac_data+o, ct, ct_len); o += ct_len;
+    while (o % 16) mac_data[o++] = 0;
+    for (int i=0;i<8;i++) mac_data[o++] = (uint8_t)((uint64_t)aad_len >> (8*i));
+    for (int i=0;i<8;i++) mac_data[o++] = (uint8_t)((uint64_t)ct_len  >> (8*i));
+    poly1305_mac(otk, mac_data, o, tag);
+}
+
+/* Non-static: used by the TX/RX/SYN-ACK wire call-sites in this file. */
+void nert_aead_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                       const uint8_t *aad, uint32_t aad_len,
+                       const uint8_t *pt, uint32_t pt_len, uint8_t *ct, uint8_t tag[16]) {
+    uint8_t otk[32];
+    poly1305_key_gen(key, nonce, otk);
+    chacha20_xor(key, nonce, 1, pt, pt_len, ct);   /* counter 1 */
+    aead_tag(otk, aad, aad_len, ct, pt_len, tag);
+    volatile uint8_t *v=otk; for(int i=0;i<32;i++) v[i]=0;
+}
+
+int nert_aead_decrypt(const uint8_t key[32], const uint8_t nonce[12],
+                      const uint8_t *aad, uint32_t aad_len,
+                      const uint8_t *ct, uint32_t ct_len, uint8_t *pt, const uint8_t tag[16]) {
+    uint8_t otk[32], t[16];
+    poly1305_key_gen(key, nonce, otk);
+    aead_tag(otk, aad, aad_len, ct, ct_len, t);
+    uint8_t diff=0; for (int i=0;i<16;i++) diff |= t[i]^tag[i];
+    if (diff) { volatile uint8_t *v=otk; for(int i=0;i<32;i++) v[i]=0; return -1; }
+    chacha20_xor(key, nonce, 1, ct, ct_len, pt);
+    volatile uint8_t *v=otk; for(int i=0;i<32;i++) v[i]=0;
+    return 0;
 }
 
 /* ============================================================================
@@ -392,163 +470,163 @@ static void secure_memzero(void *ptr, size_t len) {
 }
 
 /* ============================================================================
- * Crypto Self-Tests (RFC 8439 Test Vectors)
+ * Crypto Self-Tests (RFC 8439 Known-Answer Tests)
  * ============================================================================ */
 
+/* RFC 8439 test vectors -- verbatim from https://www.rfc-editor.org/rfc/rfc8439.txt */
+
+/* ---- 2.4.2 ChaCha20 encryption (counter starts at 1) ---- */
+static const uint8_t KAT_CHACHA_KEY[32] = {
+    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+    0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f };
+static const uint8_t KAT_CHACHA_NONCE[12] = {
+    0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x4a, 0x00,0x00,0x00,0x00 };
+static const uint8_t KAT_CHACHA_CT[114] = {
+    0x6e,0x2e,0x35,0x9a,0x25,0x68,0xf9,0x80,0x41,0xba,0x07,0x28,0xdd,0x0d,0x69,0x81,
+    0xe9,0x7e,0x7a,0xec,0x1d,0x43,0x60,0xc2,0x0a,0x27,0xaf,0xcc,0xfd,0x9f,0xae,0x0b,
+    0xf9,0x1b,0x65,0xc5,0x52,0x47,0x33,0xab,0x8f,0x59,0x3d,0xab,0xcd,0x62,0xb3,0x57,
+    0x16,0x39,0xd6,0x24,0xe6,0x51,0x52,0xab,0x8f,0x53,0x0c,0x35,0x9f,0x08,0x61,0xd8,
+    0x07,0xca,0x0d,0xbf,0x50,0x0d,0x6a,0x61,0x56,0xa3,0x8e,0x08,0x8a,0x22,0xb6,0x5e,
+    0x52,0xbc,0x51,0x4d,0x16,0xcc,0xf8,0x06,0x81,0x8c,0xe9,0x1a,0xb7,0x79,0x37,0x36,
+    0x5a,0xf9,0x0b,0xbf,0x74,0xa3,0x5b,0xe6,0xb4,0x0b,0x8e,0xed,0xf2,0x78,0x5e,0x42,
+    0x87,0x4d };
+
+/* ---- 2.5.2 Poly1305 ---- */
+static const uint8_t KAT_POLY_KEY[32] = {   /* one-time key (r||s) */
+    0x85,0xd6,0xbe,0x78,0x57,0x55,0x6d,0x33,0x7f,0x44,0x52,0xfe,0x42,0xd5,0x06,0xa8,
+    0x01,0x03,0x80,0x8a,0xfb,0x0d,0xb2,0xfd,0x4a,0xbf,0xf6,0xaf,0x41,0x49,0xf5,0x1b };
+static const uint8_t KAT_POLY_TAG[16] = {
+    0xa8,0x06,0x1d,0xc1,0x30,0x51,0x36,0xc6,0xc2,0x2b,0x8b,0xaf,0x0c,0x01,0x27,0xa9 };
+
+/* ---- 2.8.2 ChaCha20-Poly1305 AEAD ---- */
+static const uint8_t KAT_AEAD_KEY[32] = {
+    0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,
+    0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f };
+static const uint8_t KAT_AEAD_NONCE[12] = {   /* constant 07 00 00 00 || IV */
+    0x07,0x00,0x00,0x00, 0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47 };
+static const uint8_t KAT_AEAD_AAD[12] = {
+    0x50,0x51,0x52,0x53,0xc0,0xc1,0xc2,0xc3,0xc4,0xc5,0xc6,0xc7 };
+static const uint8_t KAT_AEAD_CT[114] = {
+    0xd3,0x1a,0x8d,0x34,0x64,0x8e,0x60,0xdb,0x7b,0x86,0xaf,0xbc,0x53,0xef,0x7e,0xc2,
+    0xa4,0xad,0xed,0x51,0x29,0x6e,0x08,0xfe,0xa9,0xe2,0xb5,0xa7,0x36,0xee,0x62,0xd6,
+    0x3d,0xbe,0xa4,0x5e,0x8c,0xa9,0x67,0x12,0x82,0xfa,0xfb,0x69,0xda,0x92,0x72,0x8b,
+    0x1a,0x71,0xde,0x0a,0x9e,0x06,0x0b,0x29,0x05,0xd6,0xa5,0xb6,0x7e,0xcd,0x3b,0x36,
+    0x92,0xdd,0xbd,0x7f,0x2d,0x77,0x8b,0x8c,0x98,0x03,0xae,0xe3,0x28,0x09,0x1b,0x58,
+    0xfa,0xb3,0x24,0xe4,0xfa,0xd6,0x75,0x94,0x55,0x85,0x80,0x8b,0x48,0x31,0xd7,0xbc,
+    0x3f,0xf4,0xde,0xf0,0x8e,0x4b,0x7a,0x9d,0xe5,0x76,0xd2,0x65,0x86,0xce,0xc6,0x4b,
+    0x61,0x16 };
+static const uint8_t KAT_AEAD_TAG[16] = {
+    0x1a,0xe1,0x0b,0x59,0x4f,0x09,0xe2,0x6a,0x7e,0x90,0x2e,0xcb,0xd0,0x60,0x06,0x91 };
+
+/* Sunscreen plaintext, shared by the 2.4.2 and 2.8.2 vectors (114 bytes, no
+ * trailing NUL in the callers -- pass the explicit length 114). */
+static const uint8_t sunscreen_pt[] =
+    "Ladies and Gentlemen of the class of '99: If I could offer you only "
+    "one tip for the future, sunscreen would be it.";
+
 /**
- * ChaCha8 self-test using adapted RFC 8439 Section 2.4.2 test vector
- * Note: RFC uses ChaCha20; we adapt for ChaCha8 (8 rounds)
- *
+ * RFC 8439 Section 2.4.2 ChaCha20 KAT.
  * @return 0 on success, -1 on failure
  */
-int chacha8_self_test(void) {
-    /*
-     * Test vector: All-zero key and nonce with counter=0
-     * This tests basic functionality with known inputs
-     */
-    static const uint8_t test_key[32] = {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    };
-
-    static const uint8_t test_nonce[12] = {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    };
-
-    /*
-     * Expected output for ChaCha8 (8 rounds) with all-zero inputs
-     * First 16 bytes of keystream block 0
-     * Pre-computed reference value
-     */
-    static const uint8_t expected_keystream[16] = {
-        0x3e, 0x00, 0xef, 0x2f, 0x89, 0x5f, 0x40, 0xd6,
-        0x7f, 0x5b, 0xb8, 0xe8, 0x1f, 0x09, 0xa5, 0xa1
-    };
-
-    uint8_t plaintext[16] = {0};
-    uint8_t ciphertext[16];
-
-    /* Encrypt zeros - ciphertext will be raw keystream */
-    chacha8_encrypt(test_key, test_nonce, plaintext, 16, ciphertext);
-
-    /* Constant-time comparison */
-    uint8_t diff = 0;
-    for (int i = 0; i < 16; i++) {
-        diff |= ciphertext[i] ^ expected_keystream[i];
-    }
-
-    /*
-     * Additional test: Encryption/decryption round-trip
-     * Encrypt then decrypt should yield original plaintext
-     */
-    static const uint8_t test_plaintext[32] = {
-        'N', 'E', 'R', 'T', ' ', 'P', 'r', 'o',
-        't', 'o', 'c', 'o', 'l', ' ', 'T', 'e',
-        's', 't', ' ', 'V', 'e', 'c', 't', 'o',
-        'r', ' ', 'D', 'a', 't', 'a', '!', '!'
-    };
-
-    uint8_t encrypted[32];
-    uint8_t decrypted[32];
-
-    static const uint8_t roundtrip_key[32] = {
-        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-        0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE,
-        0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01,
-        0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
-    };
-
-    static const uint8_t roundtrip_nonce[12] = {
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C
-    };
-
-    chacha8_encrypt(roundtrip_key, roundtrip_nonce, test_plaintext, 32, encrypted);
-    chacha8_encrypt(roundtrip_key, roundtrip_nonce, encrypted, 32, decrypted);
-
-    for (int i = 0; i < 32; i++) {
-        diff |= decrypted[i] ^ test_plaintext[i];
-    }
-
-    return (diff == 0) ? 0 : -1;
+static int chacha20_self_test(void) {
+    uint8_t ct[114];
+    chacha20_xor(KAT_CHACHA_KEY, KAT_CHACHA_NONCE, 1, sunscreen_pt, 114, ct);
+    return (memcmp(ct, KAT_CHACHA_CT, 114) == 0) ? 0 : -1;
 }
 
 /**
- * Poly1305 MAC self-test
- * Tests basic MAC generation and verification
- *
+ * RFC 8439 Section 2.5.2 Poly1305 KAT (mac + verify).
  * @return 0 on success, -1 on failure
  */
-int poly1305_self_test(void) {
-    static const uint8_t test_key[32] = {
-        0x85, 0xd6, 0xbe, 0x78, 0x57, 0x55, 0x6d, 0x33,
-        0x7f, 0x44, 0x52, 0xfe, 0x42, 0xd5, 0x06, 0xa8,
-        0x01, 0x03, 0x80, 0x8a, 0xfb, 0x0d, 0xb2, 0xfd,
-        0x4a, 0xbf, 0xf6, 0xaf, 0x41, 0x49, 0xf5, 0x1b
-    };
-
-    static const uint8_t test_message[] = "Cryptographic Forum Research Group";
-    static const uint8_t test_aad[] = {0x50, 0x51, 0x52, 0x53};
-
-    uint8_t tag1[NERT_MAC_SIZE];
-    uint8_t tag2[NERT_MAC_SIZE];
-
-    /* Generate MAC */
-    poly1305_mac(test_key, test_message, sizeof(test_message) - 1,
-                 test_aad, sizeof(test_aad), tag1);
-
-    /* Generate same MAC again - should be identical */
-    poly1305_mac(test_key, test_message, sizeof(test_message) - 1,
-                 test_aad, sizeof(test_aad), tag2);
-
-    /* Tags should match */
-    uint8_t diff = 0;
-    for (int i = 0; i < NERT_MAC_SIZE; i++) {
-        diff |= tag1[i] ^ tag2[i];
-    }
-
-    if (diff != 0) {
-        return -1;
-    }
-
-    /* Verify should succeed */
-    if (poly1305_verify(test_key, test_message, sizeof(test_message) - 1,
-                        test_aad, sizeof(test_aad), tag1) != 0) {
-        return -1;
-    }
-
-    /* Modify message - verify should fail */
-    uint8_t modified_message[64];
-    memcpy(modified_message, test_message, sizeof(test_message) - 1);
-    modified_message[0] ^= 0x01;  /* Flip one bit */
-
-    if (poly1305_verify(test_key, modified_message, sizeof(test_message) - 1,
-                        test_aad, sizeof(test_aad), tag1) == 0) {
-        return -1;  /* Should have failed! */
-    }
-
+static int poly1305_self_test(void) {
+    static const uint8_t msg[] = "Cryptographic Forum Research Group";
+    uint8_t tag[16];
+    poly1305_mac(KAT_POLY_KEY, msg, 34, tag);
+    if (memcmp(tag, KAT_POLY_TAG, 16) != 0) return -1;
+    if (poly1305_verify(KAT_POLY_KEY, msg, 34, KAT_POLY_TAG) != 0) return -1;
     return 0;
 }
 
 /**
- * Run all crypto self-tests
- * Should be called during nert_init()
+ * RFC 8439 Section 2.8.2 AEAD seal KAT: ciphertext and tag must match the RFC.
+ * Ciphertext/tag are returned to the caller so aead_open/tamper can reuse them.
+ * @return 0 on success, -1 on failure
+ */
+static int aead_seal_self_test(uint8_t ct_out[114], uint8_t tag_out[16]) {
+    nert_aead_encrypt(KAT_AEAD_KEY, KAT_AEAD_NONCE, KAT_AEAD_AAD, 12,
+                      sunscreen_pt, 114, ct_out, tag_out);
+    if (memcmp(ct_out, KAT_AEAD_CT, 114) != 0) return -1;
+    if (memcmp(tag_out, KAT_AEAD_TAG, 16) != 0) return -1;
+    return 0;
+}
+
+/**
+ * AEAD open round-trip: decrypting the sealed KAT ciphertext must authenticate
+ * and recover the original sunscreen plaintext.
+ * @return 0 on success, -1 on failure
+ */
+static int aead_open_self_test(const uint8_t ct[114], const uint8_t tag[16]) {
+    uint8_t dec[114];
+    if (nert_aead_decrypt(KAT_AEAD_KEY, KAT_AEAD_NONCE, KAT_AEAD_AAD, 12,
+                          ct, 114, dec, tag) != 0) {
+        return -1;
+    }
+    return (memcmp(dec, sunscreen_pt, 114) == 0) ? 0 : -1;
+}
+
+/**
+ * Tamper test: a single flipped ciphertext byte must be rejected (auth failure).
+ * @return 0 if the tampered frame was correctly rejected, -1 otherwise
+ */
+static int aead_tamper_self_test(const uint8_t ct[114], const uint8_t tag[16]) {
+    uint8_t tampered[114], dec[114];
+    memcpy(tampered, ct, 114);
+    tampered[0] ^= 0x01;
+    return (nert_aead_decrypt(KAT_AEAD_KEY, KAT_AEAD_NONCE, KAT_AEAD_AAD, 12,
+                              tampered, 114, dec, tag) == 0) ? -1 : 0;
+}
+
+/**
+ * Run all RFC 8439 crypto self-tests (ChaCha20, Poly1305, AEAD seal/open/tamper).
+ * Should be called during nert_init(). Reports each KAT on the serial console
+ * (nanOs/QEMU only -- serial_puts isn't linked into micrOs, which shares this
+ * file as nert_shared.o).
  *
  * @return 0 on all tests pass, -1 on any failure
  */
 int nert_crypto_self_test(void) {
-    if (chacha8_self_test() != 0) {
-        return -1;
-    }
+    uint8_t ct[114], tag[16];
+    int chacha_ok, poly_ok, seal_ok, open_ok, tamper_ok;
 
-    if (poly1305_self_test() != 0) {
-        return -1;
-    }
+#ifdef PLATFORM_QEMU_X86
+    /* nanOs-only: PLATFORM_QEMU_X86 is unique to the nanOs x86 build (see
+     * Makefile); ARCH_X86 is NOT usable here since micrOS's own build also
+     * defines it for its (unrelated) architecture detection, and micrOS does
+     * not link a serial_puts symbol -- this file is shared as nert_shared.o. */
+    extern void serial_puts(const char *s);
+#define KAT_REPORT(name, ok) serial_puts((ok) ? "[KAT] " name " OK\n" : "[KAT] " name " FAIL\n")
+#else
+#define KAT_REPORT(name, ok) ((void)(ok))
+#endif
 
-    return 0;
+    chacha_ok = (chacha20_self_test() == 0);
+    KAT_REPORT("chacha20", chacha_ok);
+
+    poly_ok = (poly1305_self_test() == 0);
+    KAT_REPORT("poly1305", poly_ok);
+
+    seal_ok = (aead_seal_self_test(ct, tag) == 0);
+    KAT_REPORT("aead", seal_ok);
+
+    open_ok = (aead_open_self_test(ct, tag) == 0);
+    KAT_REPORT("aead-open", open_ok);
+
+    tamper_ok = (aead_tamper_self_test(ct, tag) == 0);
+    KAT_REPORT("tamper", tamper_ok);
+
+#undef KAT_REPORT
+
+    return (chacha_ok && poly_ok && seal_ok && open_ok && tamper_ok) ? 0 : -1;
 }
 
 /* ============================================================================
