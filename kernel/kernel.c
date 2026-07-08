@@ -138,15 +138,30 @@ static void nert_message_handler(uint16_t sender_id, uint8_t msg_type,
             cell_apoptosis();
             break;
 
-        case 0x01:  /* PHEROMONE_ANNOUNCE - Queen announcement */
-            /* Update Queen tracking */
-            if (data && len >= 2) {
+        case 0x01:  /* Presence beacon (role-tagged): Queen ANNOUNCE or peer HELLO */
+            /* Phase 4: a single 0x01 presence type carries both the Queen's
+             * announcement and a peer worker's HELLO over NERT; disambiguate by
+             * the role byte at payload[3] ([0..1]=sender id, [2]=distance). */
+            if (data && len >= 4) {
                 const uint8_t *d = (const uint8_t*)data;
-                uint16_t queen_id = d[0] | (d[1] << 8);
-                if (queen_id != 0) {
-                    g_state.known_queen_id = queen_id;
-                    g_state.last_queen_seen = ticks;
-                    g_state.distance_to_queen = 1;  /* Direct from Queen */
+                uint16_t src_id = d[0] | (d[1] << 8);
+                uint8_t src_role = d[3];
+                if (src_role == ROLE_QUEEN) {
+                    if (src_id != 0) {
+                        g_state.known_queen_id = src_id;
+                        g_state.last_queen_seen = ticks;
+                        g_state.distance_to_queen = 1;  /* Direct from Queen */
+                    }
+                } else if (src_id != 0) {
+                    /* Peer worker presence -> neighbor table. Synthesize a minimal
+                     * pheromone so neighbor_update's role-count/synapse/expiry
+                     * logic applies unchanged (it reads node_id, role, distance). */
+                    struct nanos_pheromone np;
+                    np.node_id = src_id;
+                    np.flags = 0;
+                    PKT_SET_ROLE(&np, src_role);
+                    np.distance = d[2];
+                    neighbor_update(&np);
                 }
             }
             break;
@@ -1673,65 +1688,24 @@ void process_pheromone(struct nanos_pheromone* pkt) {
  * Heartbeat Emission
  * ========================================================================== */
 
-/* Ethernet constants for heartbeat - must match micrOS */
-#define HB_ETH_ALEN         6
-#define HB_NERT_ETH_TYPE    0x4F4E
-
-/* NERT multicast MAC address - must match micrOS */
-static const uint8_t HB_MULTICAST_MAC[HB_ETH_ALEN] = {
-    0x01, 0x00, 0x5E, 0x4E, 0x45, 0x52
-};
-
 void emit_heartbeat(void) {
-    /* Ethernet frame: 14 byte header + 64 byte pheromone */
-    uint8_t frame[14 + sizeof(struct nanos_pheromone)];
-    struct nanos_pheromone *pkt = (struct nanos_pheromone *)(frame + 14);
-
-    /* Build Ethernet header */
-    for (int i = 0; i < HB_ETH_ALEN; i++) {
-        frame[i] = HB_MULTICAST_MAC[i];  /* Destination: multicast */
-    }
-    e1000_get_mac(frame + HB_ETH_ALEN);  /* Source: our MAC */
-    frame[12] = (HB_NERT_ETH_TYPE >> 8) & 0xFF;  /* EtherType high byte */
-    frame[13] = HB_NERT_ETH_TYPE & 0xFF;         /* EtherType low byte */
-
-    /* Build pheromone */
-    pkt->magic   = NANOS_MAGIC;
-    pkt->node_id = g_state.node_id;
-    pkt->type    = PHEROMONE_HELLO;
-    pkt->ttl     = 1;
-    pkt->flags   = 0;
-    pkt->version = NANOS_VERSION;
-    pkt->seq     = g_state.seq_counter++;
-
-    PKT_SET_ROLE(pkt, g_state.role);
-
-    /* Routing fields - propagate gradient */
-    pkt->dest_id = 0;  /* Broadcast */
-    pkt->distance = g_state.distance_to_queen;
-    pkt->hop_count = 0;
-    pkt->via_node_lo = g_state.gradient_via & 0xFF;
-    pkt->via_node_hi = (g_state.gradient_via >> 8) & 0xFF;
-
-    /* Stats in payload */
-    uint8_t* p = pkt->payload;
-    *(uint32_t*)p = g_state.packets_rx; p += 4;
-    *(uint32_t*)p = g_state.packets_tx; p += 4;
-    *(uint32_t*)p = ticks;              p += 4;
-    *(uint32_t*)p = g_state.generation; p += 4;
-    *p++ = heap_usage_percent();
-    *p++ = g_state.role;
-    *p++ = e1000_tx_queue_depth();
-    *p++ = g_state.neighbor_count;
-
-    /* Zero HMAC for non-critical message */
-    for (int i = 0; i < HMAC_TAG_SIZE; i++) pkt->hmac[i] = 0;
-
-    /* Propagate gradient before sending */
+    /* Propagate gradient before announcing our presence. */
     gradient_propagate();
 
-    /* Send complete Ethernet frame */
-    if (e1000_send(frame, sizeof(frame)) == 0) {
+    /* Phase 4: the worker's presence beacon now rides encrypted NERT instead of a
+     * raw HELLO frame. The 4-byte payload matches the Queen's ANNOUNCE format so a
+     * single msg_type 0x01 handler serves both directions:
+     *   [0..1] = our 16-bit node id, [2] = distance-to-queen, [3] = our role.
+     * Receivers disambiguate by role: ROLE_QUEEN -> queen tracking; otherwise ->
+     * neighbor-table update. The Queen also discovers us purely from the encrypted
+     * frame's sender id (see micros_nert_rx_dispatch). Broadcast (dest 0). */
+    uint8_t presence[4];
+    presence[0] = (uint8_t)(g_state.node_id & 0xFF);
+    presence[1] = (uint8_t)((g_state.node_id >> 8) & 0xFF);
+    presence[2] = (uint8_t)g_state.distance_to_queen;
+    presence[3] = g_state.role;
+
+    if (nert_send_unreliable(0, PHEROMONE_HELLO, presence, 4) == 0) {
         g_state.packets_tx++;
     }
 

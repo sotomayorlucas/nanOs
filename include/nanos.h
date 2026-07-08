@@ -105,7 +105,9 @@ typedef _Bool              bool;
 /* Role balance thresholds */
 #define MIN_SENTINEL_RATIO  10      /* Want at least 10% sentinels */
 #define MIN_EXPLORER_RATIO  10      /* Want at least 10% explorers */
-#define QUEEN_ABSENCE_TIME  1000    /* 10 seconds without queen = election */
+#define QUEEN_ABSENCE_TIME  3000    /* 30s without queen = election (Phase 4: >=6x
+                                     * the 5s NERT announce cadence, so a few lost
+                                     * best-effort announces don't spuriously elect) */
 
 /* Transition probabilities (out of 100) */
 #define TRANSITION_PROB     50      /* 50% chance to transition */
