@@ -2635,6 +2635,22 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     stats.rx_bytes += len;
 
     uint8_t payload_len = pkt->header.payload_len;
+
+    /*
+     * C1 fix: payload_len is wire-controlled (0-255) and otherwise unbounded.
+     * Without this check, a payload_len > NERT_MAX_PAYLOAD drives an
+     * out-of-bounds memcpy into aead_tag()'s mac_data (sized for
+     * NERT_MAX_PAYLOAD only) DURING tag computation, i.e. before any
+     * authentication -- a pre-auth stack overflow reachable by any malformed
+     * frame, no key required. The second half of the check also ensures
+     * tag_ptr (below) and the ciphertext read stay inside the received frame.
+     */
+    if (payload_len > NERT_MAX_PAYLOAD ||
+        (uint32_t)NERT_HEADER_SIZE + payload_len + NERT_MAC_SIZE > (uint32_t)len) {
+        stats.rx_bad_mac++;
+        return;
+    }
+
     uint8_t *tag_ptr = raw_data + NERT_HEADER_SIZE + payload_len;
 
     /* Nonce is derived from the SENDER's node_id + counter (both in the

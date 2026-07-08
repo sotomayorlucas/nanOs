@@ -30,7 +30,7 @@ extern "C" {
 struct nert_rekey_request {
     uint32_t new_epoch;                 /* New epoch number */
     uint8_t encrypted_seed[32];         /* New key seed (encrypted with current key) */
-    uint8_t signature[16];              /* HMAC signature for authenticity */
+    uint8_t signature[NERT_MAC_SIZE];   /* HMAC signature for authenticity */
 } __attribute__((packed));
 
 /**
