@@ -51,6 +51,36 @@ extern "C" {
 #define NERT_KEY_ROTATION_SEC       3600
 #define NERT_KEY_GRACE_WINDOW_MS    30000   /* Grace window for clock drift */
 
+/*
+ * Phase 5: pin the session key to a FIXED epoch by default. The two OSes on the
+ * link run different PIT rates (nanOs 100Hz -> 10h/epoch, micrOs ~1000Hz ->
+ * 1h/epoch), so a ticks-derived epoch (ticks/(NERT_KEY_ROTATION_SEC*1000))
+ * advances at different real-time rates and the per-epoch session keys diverge
+ * after ~1h, breaking the MAC. A fixed epoch keeps the derived key stable
+ * indefinitely. To re-key, bump NERT_FIXED_EPOCH identically on all nodes;
+ * define NERT_ENABLE_KEY_ROTATION to restore the old clock-driven rotation.
+ */
+#ifndef NERT_FIXED_EPOCH
+#define NERT_FIXED_EPOCH            0
+#endif
+
+/*
+ * Phase 5: shared pre-shared key (PSK) for the encrypted NERT link -- the SINGLE
+ * source of truth, baked into swarm_master_key (nert.c) and used by every node.
+ * All nodes MUST share it. This is a WEAK, demo-grade secret (ChaCha8, no key
+ * provisioning); override at build time with
+ *   -DNERT_MASTER_KEY_INIT='{0x..,0x..,... 32 bytes ...}'
+ * to re-key the whole swarm. Real key management (KDF/provisioning) is out of
+ * scope for this project.
+ */
+#ifndef NERT_MASTER_KEY_INIT
+#define NERT_MASTER_KEY_INIT { \
+    0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, \
+    0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE, \
+    0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01, \
+    0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0 }
+#endif
+
 /* Crypto constants */
 #define NERT_CHACHA_ROUNDS          8
 #define NERT_KEY_SIZE               32

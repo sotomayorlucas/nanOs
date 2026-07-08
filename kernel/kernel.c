@@ -1928,14 +1928,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
         nert_hal_adapter_init(&g_nert_phy, (uint16_t)(g_state.node_id & 0xFFFF));
         nert_init();
 
-        /* Master key must match micrOS Queen */
-        static const uint8_t master_key[32] = {
-            0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-            0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE,
-            0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01,
-            0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
-        };
-        nert_set_master_key(master_key);
+        /* Phase 5: the master key (shared PSK) is the single baked-in constant
+         * NERT_MASTER_KEY_INIT (nert.h) that nert_init() already derived the
+         * session key from -- identical to the micrOS Queen. No per-node key
+         * literal here anymore; override with -DNERT_MASTER_KEY_INIT to re-key. */
         nert_set_receive_callback(nert_message_handler);
 
         /* Initialize Task Handler */

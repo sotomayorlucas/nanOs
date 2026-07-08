@@ -33,12 +33,11 @@ struct neighbor_entry {
  * ============================================================================ */
 
 /* Master key (pre-shared across swarm) */
-static uint8_t swarm_master_key[NERT_KEY_SIZE] = {
-    0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
-    0x8B, 0xAD, 0xF0, 0x0D, 0xFE, 0xED, 0xFA, 0xCE,
-    0x13, 0x37, 0xC0, 0xDE, 0xAB, 0xCD, 0xEF, 0x01,
-    0x23, 0x45, 0x67, 0x89, 0x9A, 0xBC, 0xDE, 0xF0
-};
+/* Phase 5: the shared PSK, single source of truth (NERT_MASTER_KEY_INIT in
+ * nert.h; override with -DNERT_MASTER_KEY_INIT to re-key). Baked here so every
+ * node -- micrOs Queen and nanOs workers -- derives the same session key without
+ * a per-node key literal. */
+static uint8_t swarm_master_key[NERT_KEY_SIZE] = NERT_MASTER_KEY_INIT;
 
 /* Session keys with grace window for epoch transitions */
 /* Non-static for use by nert_security.c (key rotation) */
@@ -556,6 +555,19 @@ int nert_crypto_self_test(void) {
  * Key Derivation
  * ============================================================================ */
 
+/*
+ * Phase 5: the epoch used for session-key derivation. Fixed by default so the key
+ * is stable across the micrOs/nanOs clock-rate mismatch (see NERT_FIXED_EPOCH in
+ * nert.h). Define NERT_ENABLE_KEY_ROTATION to restore the clock-driven epoch.
+ */
+static uint32_t nert_current_epoch(void) {
+#ifdef NERT_ENABLE_KEY_ROTATION
+    return nert_hal_get_ticks() / (NERT_KEY_ROTATION_SEC * 1000);
+#else
+    return NERT_FIXED_EPOCH;
+#endif
+}
+
 static void derive_key_for_epoch(uint32_t epoch_hour, uint8_t out_key[NERT_KEY_SIZE]) {
     uint8_t material[40];
 
@@ -596,6 +608,17 @@ void derive_session_key(uint32_t epoch_hour) {
 }
 
 /*
+ * Phase 5 SECURITY (defense in depth): an all-zero key must never be accepted as
+ * a MAC key -- the simplified Poly1305 produces an all-zero tag for it, so any
+ * forged all-zero-MAC frame would verify. prev_session_key is all-zero at epoch 0.
+ */
+static int key_is_zero(const uint8_t key[NERT_KEY_SIZE]) {
+    uint8_t acc = 0;
+    for (int i = 0; i < NERT_KEY_SIZE; i++) acc |= key[i];
+    return acc == 0;
+}
+
+/*
  * Check if we're within the grace window at epoch boundaries.
  * Returns a bitmask of valid key indices to try:
  *   Bit 0: current key
@@ -603,6 +626,18 @@ void derive_session_key(uint32_t epoch_hour) {
  *   Bit 2: next key (if near end of epoch)
  */
 static uint8_t get_valid_key_mask(void) {
+#ifndef NERT_ENABLE_KEY_ROTATION
+    /*
+     * Phase 5 SECURITY: under the default fixed epoch, ONLY the current session
+     * key is ever valid. The adjacent-epoch keys don't exist here: at epoch 0
+     * prev_session_key is permanently all-zero (derive_session_key's else branch),
+     * and the simplified Poly1305 yields an all-zero tag for an all-zero key, so
+     * accepting the "previous key" during a tick-based grace window would let any
+     * forged frame with an all-zero MAC verify -> auth bypass. The grace window
+     * only makes sense when the epoch actually advances with the clock.
+     */
+    return 0x01;
+#else
     uint32_t ticks = nert_hal_get_ticks();
     uint32_t epoch_ms = NERT_KEY_ROTATION_SEC * 1000;
     uint32_t position_in_epoch = ticks % epoch_ms;
@@ -620,6 +655,7 @@ static uint8_t get_valid_key_mask(void) {
     }
 
     return mask;
+#endif
 }
 
 /* ============================================================================
@@ -2533,21 +2569,25 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     uint8_t key_mask = get_valid_key_mask();
     const uint8_t *valid_key = NULL;
 
-    /* Try current epoch key (always valid) */
-    if (poly1305_verify(session_key, pkt->payload, payload_len,
+    /* Try current epoch key. Guard against an all-zero key symmetric with the
+     * prev/next branches: session_key is always a derived non-zero key in normal
+     * operation, but never let a wiped/zeroed key verify a forged all-zero MAC. */
+    if (!key_is_zero(session_key) &&
+        poly1305_verify(session_key, pkt->payload, payload_len,
                         (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
                         tag_ptr) == 0) {
         valid_key = session_key;
     }
-    /* Try previous epoch key (if in grace window at start of epoch) */
-    else if ((key_mask & 0x02) &&
+    /* Try previous epoch key (if in grace window at start of epoch). Never accept
+     * an all-zero key (see key_is_zero): it would verify a forged all-zero MAC. */
+    else if ((key_mask & 0x02) && !key_is_zero(prev_session_key) &&
              poly1305_verify(prev_session_key, pkt->payload, payload_len,
                             (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
                             tag_ptr) == 0) {
         valid_key = prev_session_key;
     }
-    /* Try next epoch key (if in grace window at end of epoch) */
-    else if ((key_mask & 0x04) &&
+    /* Try next epoch key (if in grace window at end of epoch). */
+    else if ((key_mask & 0x04) && !key_is_zero(next_session_key) &&
              poly1305_verify(next_session_key, pkt->payload, payload_len,
                             (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
                             tag_ptr) == 0) {
@@ -3103,18 +3143,18 @@ void nert_init(void) {
     nonce_counter = nert_hal_random();
     dedup_index = 0;
 
-    /* Derive initial session key */
-    uint32_t epoch = nert_hal_get_ticks() / (NERT_KEY_ROTATION_SEC * 1000);
-    derive_session_key(epoch);
+    /* Derive initial session key (Phase 5: fixed epoch by default). */
+    derive_session_key(nert_current_epoch());
 
     stats.min_rtt = 0xFFFF;
 }
 
 void nert_set_master_key(const uint8_t key[NERT_KEY_SIZE]) {
     memcpy(swarm_master_key, key, NERT_KEY_SIZE);
-    /* Force key re-derivation */
-    last_key_epoch = 0;
-    nert_check_key_rotation();
+    /* Re-derive the session key for the active epoch. Phase 5: derive directly
+     * (nert_check_key_rotation is a no-op under the fixed epoch, so relying on it
+     * would leave the session key stale after a key change). */
+    derive_session_key(nert_current_epoch());
 }
 
 void nert_set_receive_callback(nert_receive_callback_t callback) {
@@ -3443,11 +3483,18 @@ void nert_timer_tick(void) {
 }
 
 void nert_check_key_rotation(void) {
-    uint32_t current_epoch = nert_hal_get_ticks() / (NERT_KEY_ROTATION_SEC * 1000);
+#ifndef NERT_ENABLE_KEY_ROTATION
+    /* Phase 5: fixed epoch -> no automatic clock-driven rotation. Early-return so
+     * an explicit nert_security_initiate_rekey() (which bumps last_key_epoch) is
+     * NOT silently clobbered back to the master-derived key on the next tick. */
+    return;
+#else
+    uint32_t current_epoch = nert_current_epoch();
 
     if (current_epoch != last_key_epoch) {
         derive_session_key(current_epoch);
     }
+#endif
 }
 
 const struct nert_stats* nert_get_stats(void) {
