@@ -895,7 +895,8 @@ static uint8_t pack_messages_tlv(uint16_t dest_id,
  */
 static uint8_t unpack_messages_tlv(const uint8_t *packed_data,
                                     uint8_t packed_len,
-                                    uint16_t sender_id) {
+                                    uint16_t sender_id,
+                                    uint8_t header_flags) {
     if (packed_len < NERT_TLV_HEADER_SIZE) {
         return 0;
     }
@@ -921,9 +922,14 @@ static uint8_t unpack_messages_tlv(const uint8_t *packed_data,
         }
 
         /*
-         * v0.5: Check if this is a fragment (MSB set in type)
+         * v0.5: Check if this is a fragment. The per-message MSB (0x80) marks a
+         * fragment, BUT only when the packet header also carries NERT_FLAG_FRAG.
+         * Without the header gate, any ordinary pheromone type with bit 7 set
+         * (e.g. task 0xA0/0xA1) would be misread as a fragment and silently
+         * dropped -- the type space is 8 bits, not 7. nert_send_fragmented sets
+         * NERT_FLAG_FRAG (see build_and_send), so real fragments still resolve.
          */
-        if (msg_type & NERT_TLV_TYPE_FRAG_BIT) {
+        if ((header_flags & NERT_FLAG_FRAG) && (msg_type & NERT_TLV_TYPE_FRAG_BIT)) {
             /* Extract original type and process fragment */
             uint8_t original_type = msg_type & NERT_TLV_TYPE_MASK;
             process_fragment(sender_id, original_type, msg_data, msg_len);
@@ -1157,17 +1163,30 @@ void nert_flush_tx_queue(void) {
         struct nert_tx_queue_entry *entry = &tx_queue[idx];
 
         /*
+         * Retire the primary entry BEFORE sending. build_and_send() runs
+         * pack_messages_tlv(), whose Smart-Padding aggregation scans the queue
+         * (find_queued_message) for more messages to the same dest to fill the
+         * block. If the primary were still active it would re-find ITSELF and:
+         *   - if a second copy fits the block, pack the message twice (and
+         *     double-decrement tx_queue_count into uint8_t underflow); or
+         *   - if it doesn't fit (e.g. a full 32B task payload -> 35B, no room
+         *     for a 34B second copy in a 64B block), spin FOREVER, because
+         *     find_queued_message wraps modulo NERT_TX_QUEUE_SIZE straight back
+         *     to the same entry and search_start never escapes it.
+         * Deactivating first makes the aggregation pull only OTHER queued
+         * messages. entry->data stays valid (single-threaded) for the send.
+         */
+        entry->active = 0;
+        tx_queue_count--;
+
+        /*
          * Send via build_and_send which applies Smart Padding.
-         * build_and_send will pull additional messages from queue
+         * build_and_send will pull additional (other) messages from the queue
          * to fill the block boundary.
          */
         build_and_send(entry->dest_id, entry->pheromone_type,
                       entry->reliability_class, entry->data,
                       entry->len, entry->flags);
-
-        /* Mark primary message as sent */
-        entry->active = 0;
-        tx_queue_count--;
     }
 
     /* Update jitter state */
@@ -2606,7 +2625,8 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     if (is_tlv_format) {
         /* v0.5 TLV format - unpack multiple messages */
         uint8_t processed = unpack_messages_tlv(plaintext, payload_len,
-                                                 pkt->header.node_id);
+                                                 pkt->header.node_id,
+                                                 pkt->header.flags);
         (void)processed;  /* Stats already tracked */
 
         /* Extract first message info for connection handling below */

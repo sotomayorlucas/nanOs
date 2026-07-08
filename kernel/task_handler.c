@@ -40,6 +40,11 @@ extern void serial_puts(const char *s);
 extern void serial_put_hex(uint32_t val);
 extern void serial_put_dec(uint32_t val);
 
+/* Encrypted NERT transport (shared core, kernel/protocol/nert.c). Phase 3 sends
+ * task results over this instead of the raw pheromone frame below. */
+extern int nert_send_unreliable(uint16_t dest_id, uint8_t pheromone_type,
+                                const void *data, uint8_t len);
+
 /* Ethernet constants - must match micrOS */
 #define ETH_ALEN            6
 #define NERT_ETH_TYPE       0x4F4E  /* Must match micrOS */
@@ -110,9 +115,14 @@ static void send_raw_pheromone(uint8_t type, const void *data, uint8_t len) {
     }
 }
 
-/* Wrapper for pheromone sending (uses raw format for micrOS compatibility) */
+/* Phase 3: send task messages (results, 0xA1) to the Queen over ENCRYPTED NERT
+ * (ChaCha8 + Poly1305) instead of the raw pheromone frame. dest = the learned
+ * Queen id, or 0 (broadcast) until an ANNOUNCE has been seen -- the Queen
+ * decrypts and dispatches by type either way. The enqueue is flushed by
+ * nert_timer_tick() in the main loop. send_raw_pheromone() above is retained as
+ * the legacy fallback for message types not yet migrated to NERT. */
 static inline void nert_send_pheromone(uint8_t type, const void *data, uint8_t len) {
-    send_raw_pheromone(type, data, len);
+    nert_send_unreliable((uint16_t)g_state.known_queen_id, type, data, len);
 }
 
 /* Global handler state */
