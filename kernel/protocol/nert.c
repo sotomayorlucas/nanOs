@@ -664,9 +664,9 @@ static void derive_key_for_epoch(uint32_t epoch_hour, uint8_t out_key[NERT_KEY_S
     material[38] = 0x52; /* 'R' */
     material[39] = 0x54; /* 'T' */
 
-    /* Key derivation using ChaCha8 as PRF */
+    /* Key derivation using ChaCha20 as PRF */
     uint8_t nonce[12] = {0};
-    chacha8_encrypt(swarm_master_key, nonce, material, 32, out_key);
+    nert_chacha20_encrypt(swarm_master_key, nonce, material, 32, out_key);
 }
 
 /* Non-static for use by nert_security.c (key rotation key derivation) */
@@ -2584,20 +2584,18 @@ static int build_and_send(uint16_t dest_id, uint8_t pheromone_type,
     /* Update header with actual padded payload length */
     pkt.header.payload_len = packed_len;
 
-    /* Build nonce and encrypt */
+    /* Build nonce, then seal with the RFC 8439 AEAD: header is the AAD, the
+     * 16-byte tag MUST go immediately after the actual payload (offset
+     * HEADER+packed_len), because that is where the wire puts it (total_len
+     * below) and where the receiver reads it (tag_ptr = raw + HEADER +
+     * payload_len). Writing it to the fixed-offset pkt.auth field instead
+     * meant the transmitted "tag" was really the zeroed tail of the payload
+     * array -> every packet shipped an all-zero tag, so only the all-zero
+     * (prev-epoch) key ever verified and decryption used the wrong key. This
+     * is why NERT never worked on the wire. */
     build_nonce(nonce, pkt.header.node_id, pkt.header.nonce_counter);
-    chacha8_encrypt(session_key, nonce, plaintext, packed_len, pkt.payload);
-
-    /* Compute MAC over header + encrypted payload. The tag MUST go immediately
-     * after the actual payload (offset HEADER+packed_len), because that is where
-     * the wire puts it (total_len below) and where the receiver reads it
-     * (tag_ptr = raw + HEADER + payload_len). Writing it to the fixed-offset
-     * pkt.auth field instead meant the transmitted "tag" was really the zeroed
-     * tail of the payload array -> every packet shipped an all-zero tag, so only
-     * the all-zero (prev-epoch) key ever verified and decryption used the wrong
-     * key. This is why NERT never worked on the wire. */
-    poly1305_mac(session_key, pkt.payload, packed_len,
-                 (uint8_t*)&pkt.header, NERT_HEADER_SIZE, pkt.payload + packed_len);
+    nert_aead_encrypt(session_key, nonce, (uint8_t*)&pkt.header, NERT_HEADER_SIZE,
+                      plaintext, packed_len, pkt.payload, pkt.payload + packed_len);
 
     /* Send - payload is now padded to block boundary */
     uint16_t total_len = NERT_HEADER_SIZE + packed_len + NERT_MAC_SIZE;
@@ -2639,40 +2637,40 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     uint8_t payload_len = pkt->header.payload_len;
     uint8_t *tag_ptr = raw_data + NERT_HEADER_SIZE + payload_len;
 
+    /* Nonce is derived from the SENDER's node_id + counter (both in the
+     * header), so it must be built before the AEAD open below. */
+    uint8_t nonce[NERT_NONCE_SIZE];
+    build_nonce(nonce, pkt->header.node_id, pkt->header.nonce_counter);
+
     /*
-     * Verify MAC with grace window support.
+     * Open (authenticate + decrypt) with grace window support.
      * Try current key first, then adjacent epoch keys if within grace window.
      * This handles clock drift between nodes at epoch boundaries.
      */
     uint8_t key_mask = get_valid_key_mask();
-    const uint8_t *valid_key = NULL;
+    uint8_t plaintext[NERT_MAX_PAYLOAD];
+    int open_ok = -1;
 
     /* Try current epoch key. Guard against an all-zero key symmetric with the
      * prev/next branches: session_key is always a derived non-zero key in normal
      * operation, but never let a wiped/zeroed key verify a forged all-zero MAC. */
-    if (!key_is_zero(session_key) &&
-        poly1305_verify(session_key, pkt->payload, payload_len,
-                        (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
-                        tag_ptr) == 0) {
-        valid_key = session_key;
-    }
+    if (!key_is_zero(session_key))
+        open_ok = nert_aead_decrypt(session_key, nonce, (uint8_t*)&pkt->header,
+                                    NERT_HEADER_SIZE, pkt->payload, payload_len,
+                                    plaintext, tag_ptr);
     /* Try previous epoch key (if in grace window at start of epoch). Never accept
      * an all-zero key (see key_is_zero): it would verify a forged all-zero MAC. */
-    else if ((key_mask & 0x02) && !key_is_zero(prev_session_key) &&
-             poly1305_verify(prev_session_key, pkt->payload, payload_len,
-                            (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
-                            tag_ptr) == 0) {
-        valid_key = prev_session_key;
-    }
+    if (open_ok != 0 && (key_mask & 0x02) && !key_is_zero(prev_session_key))
+        open_ok = nert_aead_decrypt(prev_session_key, nonce, (uint8_t*)&pkt->header,
+                                    NERT_HEADER_SIZE, pkt->payload, payload_len,
+                                    plaintext, tag_ptr);
     /* Try next epoch key (if in grace window at end of epoch). */
-    else if ((key_mask & 0x04) && !key_is_zero(next_session_key) &&
-             poly1305_verify(next_session_key, pkt->payload, payload_len,
-                            (uint8_t*)&pkt->header, NERT_HEADER_SIZE,
-                            tag_ptr) == 0) {
-        valid_key = next_session_key;
-    }
+    if (open_ok != 0 && (key_mask & 0x04) && !key_is_zero(next_session_key))
+        open_ok = nert_aead_decrypt(next_session_key, nonce, (uint8_t*)&pkt->header,
+                                    NERT_HEADER_SIZE, pkt->payload, payload_len,
+                                    plaintext, tag_ptr);
 
-    if (!valid_key) {
+    if (open_ok != 0) {
         stats.rx_bad_mac++;
         /*
          * v0.5: Report bad MAC violation to behavioral blacklist
@@ -2709,12 +2707,7 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
         return;
     }
 
-    /* Decrypt payload using the key that verified successfully */
-    uint8_t nonce[NERT_NONCE_SIZE];
-    uint8_t plaintext[NERT_MAX_PAYLOAD];
-
-    build_nonce(nonce, pkt->header.node_id, pkt->header.nonce_counter);
-    chacha8_encrypt(valid_key, nonce, pkt->payload, payload_len, plaintext);
+    /* plaintext was already authenticated + decrypted by nert_aead_decrypt above. */
 
     /*
      * Smart Padding (v0.5): Check if this is TLV-packed payload
@@ -2805,14 +2798,12 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
 
             build_nonce(nonce, resp.header.node_id, resp.header.nonce_counter);
             uint8_t syn_payload = PHEROMONE_ECHO;
-            chacha8_encrypt(session_key, nonce, &syn_payload, 1, resp.payload);
             resp.header.payload_len = 1;
 
             /* Tag goes right after the payload (see build_and_send), not the
              * fixed pkt.auth offset, so it lands where the wire/receiver expect. */
-            poly1305_mac(session_key, resp.payload, 1,
-                         (uint8_t*)&resp.header, NERT_HEADER_SIZE,
-                         resp.payload + 1);
+            nert_aead_encrypt(session_key, nonce, (uint8_t*)&resp.header, NERT_HEADER_SIZE,
+                              &syn_payload, 1, resp.payload, resp.payload + 1);
 
             nert_hal_send(&resp, NERT_HEADER_SIZE + 1 + NERT_MAC_SIZE);
             notify_connection_state(conn, NERT_STATE_ESTABLISHED);
