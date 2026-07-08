@@ -7,6 +7,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* NOTE: not compiled for x86 (not in Makefile SRCS); still references
+ * pre-RFC8439 chacha8_/poly1305 signatures -- update before reviving this
+ * target. */
+
 #include "nert_auth.h"
 #include "../../include/nert.h"
 #include <string.h>

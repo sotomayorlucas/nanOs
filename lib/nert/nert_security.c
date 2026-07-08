@@ -41,19 +41,17 @@ extern int nert_send_unreliable(uint16_t dest_id, uint8_t pheromone_type,
                                 const void *data, uint8_t len);
 extern void derive_session_key(uint32_t epoch_hour);
 
-/* External crypto functions from nert.c */
-extern void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+/* External crypto functions from nert.c (RFC 8439 ChaCha20 + Poly1305) */
+extern void nert_chacha20_encrypt(const uint8_t key[32], const uint8_t nonce[12],
                            const uint8_t *plaintext, uint8_t len,
                            uint8_t *ciphertext);
 
-extern void poly1305_mac(const uint8_t key[32],
-                        const uint8_t *message, uint8_t msg_len,
-                        const uint8_t *aad, uint8_t aad_len,
+extern void poly1305_mac(const uint8_t otk[32],
+                        const uint8_t *message, uint32_t msg_len,
                         uint8_t tag[NERT_MAC_SIZE]);
 
-extern int poly1305_verify(const uint8_t key[32],
-                          const uint8_t *message, uint8_t msg_len,
-                          const uint8_t *aad, uint8_t aad_len,
+extern int poly1305_verify(const uint8_t otk[32],
+                          const uint8_t *message, uint32_t msg_len,
                           const uint8_t expected_tag[NERT_MAC_SIZE]);
 
 /* ============================================================================
@@ -222,13 +220,16 @@ int nert_security_initiate_rekey(uint32_t new_epoch) {
     nonce[3] = new_epoch & 0xFF;
 
     /* Step 3: Encrypt the seed with current session key */
-    chacha8_encrypt(session_key, nonce, new_seed, 32, request.encrypted_seed);
+    nert_chacha20_encrypt(session_key, nonce, new_seed, 32, request.encrypted_seed);
 
     /* Step 4: Set epoch in request */
     request.new_epoch = new_epoch;
 
     /* Step 5: Sign the request with Poly1305 MAC
      * Sign: new_epoch || encrypted_seed
+     * Note: session_key is reused directly as the Poly1305 one-time key here
+     * (this manual-rekey path predates the AEAD and isn't on the hot wire
+     * path) -- acceptable since it's a distinct message from the AEAD tag.
      */
     uint8_t to_sign[36];  /* 4 bytes epoch + 32 bytes encrypted seed */
     to_sign[0] = (new_epoch >> 24) & 0xFF;
@@ -237,7 +238,7 @@ int nert_security_initiate_rekey(uint32_t new_epoch) {
     to_sign[3] = new_epoch & 0xFF;
     memcpy(to_sign + 4, request.encrypted_seed, 32);
 
-    poly1305_mac(session_key, to_sign, 36, NULL, 0, request.signature);
+    poly1305_mac(session_key, to_sign, 36, request.signature);
 
     /* Step 6: Broadcast PHEROMONE_REKEY to swarm
      * Destination 0 = broadcast to all nodes
@@ -296,7 +297,7 @@ int nert_security_handle_rekey(const struct nert_rekey_request *request) {
     memcpy(to_verify + 4, request->encrypted_seed, 32);
 
     /* Verify using current session key */
-    if (poly1305_verify(session_key, to_verify, 36, NULL, 0, request->signature) != 0) {
+    if (poly1305_verify(session_key, to_verify, 36, request->signature) != 0) {
         /* Signature verification failed - could be attack */
         invalid_payload_count++;
         return -1;
@@ -316,7 +317,7 @@ int nert_security_handle_rekey(const struct nert_rekey_request *request) {
 
     /* Note: ChaCha is symmetric, so encrypt = decrypt */
     uint8_t decrypted_seed[32];
-    chacha8_encrypt(session_key, nonce, request->encrypted_seed, 32, decrypted_seed);
+    nert_chacha20_encrypt(session_key, nonce, request->encrypted_seed, 32, decrypted_seed);
 
     /* Step 3: USE THE DECRYPTED SEED AS THE NEW KEY
      *

@@ -17,7 +17,7 @@ extern "C" {
 
 #define NERT_KEY_SIZE       32
 #define NERT_NONCE_SIZE     12
-#define NERT_MAC_SIZE       8
+#define NERT_MAC_SIZE       16
 
 /* ============================================================================
  * Key Management
@@ -119,33 +119,29 @@ void nert_security_get_stats(uint32_t *bad_mac_count,
  * ============================================================================ */
 
 /**
- * ChaCha8 encryption
- * Lightweight cipher for embedded systems
+ * ChaCha20 encryption (RFC 8439), counter starts at 0.
  */
-void chacha8_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+void nert_chacha20_encrypt(const uint8_t key[32], const uint8_t nonce[12],
                      const uint8_t *plaintext, uint8_t len,
                      uint8_t *ciphertext);
 
 /**
- * Poly1305 MAC computation
- * Simplified for embedded systems (64-bit output)
+ * Poly1305 MAC computation (RFC 8439, 130-bit, 16-byte tag)
  */
-void poly1305_mac(const uint8_t key[32],
-                  const uint8_t *message, uint8_t msg_len,
-                  const uint8_t *aad, uint8_t aad_len,
+void poly1305_mac(const uint8_t otk[32],
+                  const uint8_t *message, uint32_t msg_len,
                   uint8_t tag[NERT_MAC_SIZE]);
 
 /**
  * Poly1305 MAC verification
  */
-int poly1305_verify(const uint8_t key[32],
-                    const uint8_t *message, uint8_t msg_len,
-                    const uint8_t *aad, uint8_t aad_len,
+int poly1305_verify(const uint8_t otk[32],
+                    const uint8_t *message, uint32_t msg_len,
                     const uint8_t expected_tag[NERT_MAC_SIZE]);
 
 /**
  * Derive key from master key and epoch
- * Uses ChaCha8 as PRF (Pseudo-Random Function)
+ * Uses ChaCha20 as PRF (Pseudo-Random Function)
  */
 void derive_key_for_epoch(const uint8_t master_key[NERT_KEY_SIZE],
                           uint32_t epoch,
