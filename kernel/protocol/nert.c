@@ -626,10 +626,16 @@ static uint8_t get_valid_key_mask(void) {
  * Nonce Construction
  * ============================================================================ */
 
-static void build_nonce(uint8_t nonce[NERT_NONCE_SIZE], uint32_t counter) {
-    uint16_t node_id = nert_hal_get_node_id();
-    uint32_t ticks = nert_hal_get_ticks();
-
+/* Build the ChaCha nonce from the SENDER's node_id and per-message counter.
+ * Both are carried in the packet header, so the receiver reconstructs the exact
+ * same nonce. (Previously this mixed in the LOCAL node_id and the local 32-bit
+ * tick counter -- neither reproducible by the receiver, and only 16 bits of the
+ * timestamp were even transmitted -- so inter-node decryption always produced
+ * garbage even though the MAC verified. That is why NERT never worked on the
+ * wire. node_id + monotonic per-node counter is unique per (key,message), which
+ * is what ChaCha needs.) */
+static void build_nonce(uint8_t nonce[NERT_NONCE_SIZE],
+                        uint16_t node_id, uint32_t counter) {
     /* Bytes 0-1: Node ID */
     nonce[0] = (node_id >> 8) & 0xFF;
     nonce[1] = node_id & 0xFF;
@@ -644,11 +650,11 @@ static void build_nonce(uint8_t nonce[NERT_NONCE_SIZE], uint32_t counter) {
     nonce[6] = (counter >> 8) & 0xFF;
     nonce[7] = counter & 0xFF;
 
-    /* Bytes 8-11: Timestamp */
-    nonce[8] = (ticks >> 24) & 0xFF;
-    nonce[9] = (ticks >> 16) & 0xFF;
-    nonce[10] = (ticks >> 8) & 0xFF;
-    nonce[11] = ticks & 0xFF;
+    /* Bytes 8-11: extra spread, still derived only from counter+node_id. */
+    nonce[8]  = (counter >> 8) & 0xFF;
+    nonce[9]  = counter & 0xFF;
+    nonce[10] = (node_id >> 8) & 0xFF;
+    nonce[11] = node_id & 0xFF;
 }
 
 /* ============================================================================
@@ -2446,12 +2452,19 @@ static int build_and_send(uint16_t dest_id, uint8_t pheromone_type,
     pkt.header.payload_len = packed_len;
 
     /* Build nonce and encrypt */
-    build_nonce(nonce, nonce_counter);
+    build_nonce(nonce, pkt.header.node_id, pkt.header.nonce_counter);
     chacha8_encrypt(session_key, nonce, plaintext, packed_len, pkt.payload);
 
-    /* Compute MAC over header + encrypted payload */
+    /* Compute MAC over header + encrypted payload. The tag MUST go immediately
+     * after the actual payload (offset HEADER+packed_len), because that is where
+     * the wire puts it (total_len below) and where the receiver reads it
+     * (tag_ptr = raw + HEADER + payload_len). Writing it to the fixed-offset
+     * pkt.auth field instead meant the transmitted "tag" was really the zeroed
+     * tail of the payload array -> every packet shipped an all-zero tag, so only
+     * the all-zero (prev-epoch) key ever verified and decryption used the wrong
+     * key. This is why NERT never worked on the wire. */
     poly1305_mac(session_key, pkt.payload, packed_len,
-                 (uint8_t*)&pkt.header, NERT_HEADER_SIZE, pkt.auth.poly1305_tag);
+                 (uint8_t*)&pkt.header, NERT_HEADER_SIZE, pkt.payload + packed_len);
 
     /* Send - payload is now padded to block boundary */
     uint16_t total_len = NERT_HEADER_SIZE + packed_len + NERT_MAC_SIZE;
@@ -2563,7 +2576,7 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
     uint8_t nonce[NERT_NONCE_SIZE];
     uint8_t plaintext[NERT_MAX_PAYLOAD];
 
-    build_nonce(nonce, pkt->header.nonce_counter);
+    build_nonce(nonce, pkt->header.node_id, pkt->header.nonce_counter);
     chacha8_encrypt(valid_key, nonce, pkt->payload, payload_len, plaintext);
 
     /*
@@ -2652,14 +2665,16 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
 
             resp.header.nonce_counter = ++nonce_counter;
 
-            build_nonce(nonce, nonce_counter);
+            build_nonce(nonce, resp.header.node_id, resp.header.nonce_counter);
             uint8_t syn_payload = PHEROMONE_ECHO;
             chacha8_encrypt(session_key, nonce, &syn_payload, 1, resp.payload);
             resp.header.payload_len = 1;
 
+            /* Tag goes right after the payload (see build_and_send), not the
+             * fixed pkt.auth offset, so it lands where the wire/receiver expect. */
             poly1305_mac(session_key, resp.payload, 1,
                          (uint8_t*)&resp.header, NERT_HEADER_SIZE,
-                         resp.auth.poly1305_tag);
+                         resp.payload + 1);
 
             nert_hal_send(&resp, NERT_HEADER_SIZE + 1 + NERT_MAC_SIZE);
             notify_connection_state(conn, NERT_STATE_ESTABLISHED);
@@ -3271,6 +3286,14 @@ void nert_process_incoming(void) {
     while ((len = nert_hal_receive(buffer, sizeof(buffer))) > 0) {
         handle_received_packet(buffer, len);
     }
+}
+
+/* Deliver ONE already-de-framed NERT payload (Ethernet header stripped) to the
+ * receive path. Lets a caller demultiplex the single NIC RX ring by payload magic
+ * (raw pheromone vs NERT) and feed NERT frames here, instead of nert_process_incoming
+ * re-draining the ring and stealing the raw pheromones. */
+void nert_deliver_frame(const uint8_t *payload, uint16_t len) {
+    handle_received_packet((uint8_t *)payload, len);
 }
 
 void nert_timer_tick(void) {

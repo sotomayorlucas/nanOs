@@ -25,7 +25,8 @@ ifeq ($(ARCH),x86)
     CFLAGS  := -m32 -ffreestanding -fno-stack-protector -fno-pic \
                -nostdlib -nostdinc -isystem $(GCC_INCLUDE) -Wall -Wextra -Werror \
                -Wno-unused-function -Wno-unused-but-set-variable \
-               -O2 -std=c99 -I include -I lib/nert -DARCH_X86 -DPLATFORM_QEMU_X86
+               -O2 -std=c99 -I include -I lib/nert -DARCH_X86 -DPLATFORM_QEMU_X86 \
+               $(EXTRA_CFLAGS)
     ASFLAGS := -f elf32
     LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 

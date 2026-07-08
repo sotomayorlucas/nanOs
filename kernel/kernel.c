@@ -1768,10 +1768,20 @@ void nanos_loop(void) {
          * micrOS sends raw pheromones, not encrypted NERT packets. */
         while (e1000_has_packet()) {
             int len = e1000_receive(rx_buffer, sizeof(rx_buffer));
+            if (len < (int)sizeof(struct eth_header)) continue;
 
-            if (len >= (int)(sizeof(struct eth_header) + sizeof(struct nanos_pheromone))) {
-                struct nanos_pheromone* pkt =
-                    (struct nanos_pheromone*)(rx_buffer + sizeof(struct eth_header));
+            uint8_t *payload = rx_buffer + sizeof(struct eth_header);
+            int payload_len = len - (int)sizeof(struct eth_header);
+
+            /* Demultiplex the single e1000 RX ring by payload magic. Raw pheromones
+             * and encrypted NERT share EtherType 0x4F4E, so we route by the first
+             * payload byte: 0x4E = NERT (NERT_MAGIC), 0x4F = raw (NANOS_MAGIC
+             * 0x4E414E4F, little-endian). NERT frames go to the NERT stack instead of
+             * nert_process_incoming re-draining the ring and stealing raw pheromones. */
+            if (g_nert_enabled && payload_len > 0 && (uint8_t)payload[0] == NERT_MAGIC) {
+                nert_deliver_frame(payload, (uint16_t)payload_len);
+            } else if (payload_len >= (int)sizeof(struct nanos_pheromone)) {
+                struct nanos_pheromone* pkt = (struct nanos_pheromone*)payload;
 
 #if NANOS_DEBUG
                 serial_puts("[RX] len=");
@@ -1790,9 +1800,9 @@ void nanos_loop(void) {
         /* NERT Protocol Processing (if enabled) */
         if (g_nert_enabled) {
             nert_hal_update_ticks();
-            /* NOTE: nert_process_incoming() disabled - it consumes packets
-             * and discards raw pheromones. micrOS uses raw format. */
-            /* nert_process_incoming(); */
+            /* RX is handled by the demux in the drain loop above (nert_deliver_frame
+             * per NERT-magic frame), NOT nert_process_incoming() -- that would
+             * re-drain the single RX ring and steal the raw pheromones. */
             nert_timer_tick();
             nert_check_key_rotation();
 

@@ -881,6 +881,7 @@ int nert_get_connection_state(int conn_id);
  * Should be called from main loop
  */
 void nert_process_incoming(void);
+void nert_deliver_frame(const uint8_t *payload, uint16_t len);
 
 /**
  * Timer tick for retransmissions
