@@ -108,9 +108,18 @@ uint32_t nert_hal_get_ticks(void) {
     return ticks;
 }
 
+/* Phase 6: RDTSC — CPU cycle counter. On real hardware it varies widely per boot
+ * (genuine nonce entropy); under a deterministic VM reset it is weak but harmless. */
+static inline uint32_t hal_rdtsc32(void) {
+    uint32_t lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return lo ^ hi;
+}
+
 uint32_t nert_hal_random(void) {
     /* Mix in hardware entropy if available */
     rng_state ^= ticks;
+    rng_state ^= hal_rdtsc32();                    /* Phase 6: RDTSC entropy */
     rng_state ^= (uint32_t)(uintptr_t)&rng_state; /* ASLR entropy */
     return xorshift32();
 }
@@ -136,8 +145,8 @@ uint16_t nert_hal_get_node_id(void) {
  * ============================================================================ */
 
 void nert_hal_init(void) {
-    /* Seed PRNG with entropy */
-    rng_state = ticks ^ 0xDEADBEEF;
+    /* Seed PRNG with entropy (Phase 6: mix RDTSC for per-boot variation on HW). */
+    rng_state = ticks ^ 0xDEADBEEF ^ hal_rdtsc32();
     xorshift32(); /* Warm up */
     xorshift32();
     xorshift32();

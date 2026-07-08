@@ -60,6 +60,21 @@ static struct nert_connection connections[NERT_MAX_CONNECTIONS];
 static uint16_t global_seq = 0;
 static uint32_t nonce_counter = 0;
 
+/*
+ * Phase 6 (I1 mitigation): the per-message nonce is node_id||nonce_counter, and
+ * with the fixed epoch the session key is stable across reboots -- so if the
+ * counter restarted from a deterministic value each boot, (key,nonce) pairs would
+ * repeat, catastrophic for a real AEAD (keystream + Poly1305 OTK reuse). We defer
+ * seeding nonce_counter to the first TX and mix in the best per-boot entropy we
+ * have: the HAL RNG (RDTSC-fed on x86), accumulated network-RX entropy (frame
+ * bytes + arrival ticks vary per boot in the mcast swarm), and the tick clock.
+ * REAL fix on hardware with a running TSC; best-effort under a deterministic VM
+ * replay (no persistence/true entropy on a disposable node). The counter is still
+ * transmitted, so the receiver rebuilds the nonce unchanged -- no wire impact.
+ */
+static uint32_t rx_entropy = 0;
+static uint8_t  nonce_seeded = 0;
+
 /* Deduplication cache */
 struct dedup_entry {
     uint16_t sender_id;
@@ -2547,6 +2562,22 @@ void nert_cover_reset_stats(void) {
  * Packet Building and Sending
  * ============================================================================ */
 
+/*
+ * Phase 6: seed the per-boot nonce counter lazily, at the first TX, from all the
+ * entropy available by then (HAL RNG w/ RDTSC, accumulated network-RX entropy,
+ * tick clock, stack address). Deferring past nert_init captures RX entropy that
+ * only exists once the node has been on the wire. See the rx_entropy comment.
+ */
+static void ensure_nonce_seeded(void) {
+    if (nonce_seeded) return;
+    uint32_t e = nert_hal_random();
+    e ^= rx_entropy;
+    e ^= nert_hal_get_ticks() * 2654435761u;      /* Knuth multiplicative hash */
+    e ^= (uint32_t)(uintptr_t)&e;                  /* weak, but another source */
+    nonce_counter = e ? e : 0xA5A5A5A5u;           /* avoid a degenerate zero start */
+    nonce_seeded = 1;
+}
+
 static int build_and_send(uint16_t dest_id, uint8_t pheromone_type,
                           uint8_t reliability_class, const void *data,
                           uint8_t len, uint8_t flags) {
@@ -2562,6 +2593,7 @@ static int build_and_send(uint16_t dest_id, uint8_t pheromone_type,
     pkt.header.seq_num = ++global_seq;
     pkt.header.flags = flags | NERT_FLAG_ENC;
     pkt.header.payload_len = len + 1; /* +1 for pheromone_type */
+    ensure_nonce_seeded();            /* Phase 6: per-boot nonce entropy */
     pkt.header.nonce_counter = ++nonce_counter;
 
 #if !NERT_COMPACT_MODE
@@ -2633,6 +2665,15 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
 
     stats.rx_packets++;
     stats.rx_bytes += len;
+
+    /* Phase 6: accumulate per-boot network entropy (arrival tick + frame bytes
+     * vary boot-to-boot in the mcast swarm) to seed the nonce counter. Runs for
+     * every authenticated-or-not frame; it only feeds entropy, never trusted. */
+    rx_entropy = ((rx_entropy << 7) | (rx_entropy >> 25))
+                 ^ nert_hal_get_ticks()
+                 ^ (uint32_t)raw_data[0]
+                 ^ ((uint32_t)raw_data[len - 1] << 8)
+                 ^ ((uint32_t)len << 16);
 
     uint8_t payload_len = pkt->header.payload_len;
 
@@ -2810,6 +2851,7 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
             resp.header.ack_num = conn->recv_seq;
 #endif
 
+            ensure_nonce_seeded();            /* Phase 6: per-boot nonce entropy */
             resp.header.nonce_counter = ++nonce_counter;
 
             build_nonce(nonce, resp.header.node_id, resp.header.nonce_counter);
@@ -3225,7 +3267,11 @@ void nert_init(void) {
     cover_config.dest_id = 0;
 
     global_seq = nert_hal_random() & 0xFFFF;
-    nonce_counter = nert_hal_random();
+    /* Phase 6: do NOT seed nonce_counter here (ticks~0, no RX entropy yet at
+     * boot). ensure_nonce_seeded() seeds it lazily at the first TX from the
+     * entropy accumulated by then. */
+    nonce_counter = 0;
+    nonce_seeded = 0;
     dedup_index = 0;
 
     /* Derive initial session key (Phase 5: fixed epoch by default). */

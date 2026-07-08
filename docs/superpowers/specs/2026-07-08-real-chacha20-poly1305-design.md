@@ -126,16 +126,21 @@ y que ningún call-site quede en la ruta vieja.
 
 ## Limitaciones conocidas (documentadas)
 
-- **BLOCKER pre-producción — reúso de nonce (I1, hallado en la revisión final):**
-  con época fija (Phase 5) la session key es estable, y `nonce_counter` **resetea
-  a 0 en cada reboot** → un nodo que reinicia reutiliza pares `(key, nonce)`. Para
-  una AEAD ChaCha20-Poly1305 *real* esto es catastrófico: mismo keystream (fuga por
-  XOR de plaintexts) **y** reúso de la one-time-key de Poly1305 → falsificación de
-  tags. También aplica el wrap del counter de 32 bits tras 2³² mensajes. Es
-  **out-of-scope** por constraint ("nonce/época sin cambios") y preexistente (la
-  cripto débil tenía el mismo reúso), y es **inalcanzable/aceptable en el demo
-  QEMU de un solo boot**, PERO debe resolverse antes de cualquier uso real:
-  persistir/aleatorizar el counter, o atarlo a un salt por-boot / a la época.
+- **Reúso de nonce (I1) — MITIGADO en Phase 6, con residual documentado:**
+  con época fija (Phase 5) la session key es estable; antes el `nonce_counter`
+  arrancaba de un valor casi determinístico por boot (RNG sembrado con
+  `ticks~0 ^ DEADBEEF ^ &var` sin ASLR) → reboots reutilizaban pares `(key,
+  nonce)`, catastrófico para una AEAD real (fuga de keystream + reúso de la OTK de
+  Poly1305 → falsificación). **Phase 6** siembra el `nonce_counter` de forma
+  diferida (al primer TX) mezclando la mejor entropía disponible: RDTSC (HALs
+  x86), un acumulador de entropía de RX (bytes de frame + tick de llegada, que
+  varían por boot en el swarm mcast), y el reloj de ticks. El counter se sigue
+  transmitiendo → sin impacto de wire, el receptor reconstruye el nonce igual.
+  **Residual:** es un fix REAL en hardware con TSC corriendo; bajo un replay 100%
+  determinístico (mismo VM, misma secuencia) sigue siendo best-effort — la
+  unicidad *garantizada* necesita persistencia del counter (no hay en un nodo
+  desechable) o entropía real. También queda el wrap del counter de 32 bits tras
+  2³² mensajes (inalcanzable en el demo).
 - Los archivos `lib/nert/*` no compilados quedan inconsistentes hasta que se
   revivan sus targets.
 - El self-test de cripto (KATs) loguea pero **no halta** el boot ante fallo (M1);
