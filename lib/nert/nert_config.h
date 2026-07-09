@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include "nert_phy_if.h"
+#include <nert_proto.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,23 +22,13 @@ struct nert_phy_interface;
 
 /* ============================================================================
  * Message Types (Pheromones)
- * Application can define custom types starting from 0x80
+ * The canonical PHEROMONE_* protocol type space (NERT-island values) now
+ * comes from <nert_proto.h> (single source of truth shared with micrOs).
+ * These values were already numerically identical here, so pulling them
+ * from the canonical header is value-neutral; it just removes this file as
+ * a second place the values could drift (include-order hazard).
+ * Application can define custom types starting from PHEROMONE_APP_BASE.
  * ============================================================================ */
-
-/* Core protocol messages */
-#define PHEROMONE_ECHO          0x00    /* Keep-alive / ping */
-#define PHEROMONE_ANNOUNCE      0x01    /* Node announcement */
-#define PHEROMONE_ELECTION      0x02    /* Leader election */
-#define PHEROMONE_REKEY         0x03    /* Key rotation (NEW in v0.4) */
-
-/* Application messages */
-#define PHEROMONE_DATA          0x10    /* Generic data */
-#define PHEROMONE_ALARM         0x11    /* Alert/alarm */
-#define PHEROMONE_COMMAND       0x12    /* Command/control */
-#define PHEROMONE_DIE           0x13    /* Apoptosis trigger */
-
-/* Application-defined start */
-#define PHEROMONE_APP_BASE      0x80
 
 /* ============================================================================
  * Security Configuration

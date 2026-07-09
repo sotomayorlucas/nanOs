@@ -10,6 +10,7 @@
 #define NANOS_TASK_HANDLER_H
 
 #include <stdint.h>
+#include <nert_proto.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,14 +26,11 @@ extern "C" {
 
 /* =============================================================================
  * Task Pheromone Types (must match Queen-side micrOS)
- * Range 0xA0-0xAF reserved for task distribution
+ * Range 0xA0-0xAF reserved for task distribution.
+ * Canonical values now come from <nert_proto.h> (PHEROMONE_TASK_ASSIGN/
+ * RESULT/STATUS/CANCEL), single source of truth shared with micrOs.
  * =============================================================================
  */
-
-#define PHEROMONE_TASK_ASSIGN       0xA0    /* Task from Queen → Worker */
-#define PHEROMONE_TASK_RESULT       0xA1    /* Result from Worker → Queen */
-#define PHEROMONE_TASK_STATUS       0xA2    /* Status query/response */
-#define PHEROMONE_TASK_CANCEL       0xA3    /* Cancel task */
 
 /* =============================================================================
  * Task Types (must match Queen-side)

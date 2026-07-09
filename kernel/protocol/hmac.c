@@ -2,7 +2,7 @@
  * NanOS HMAC Authentication - SipHash-inspired simplified HMAC
  *
  * Provides message authentication for critical pheromone types
- * (DIE, QUEEN_CMD, REBIRTH) using a shared swarm secret.
+ * (DIE, COMMAND, REBIRTH) using a shared swarm secret.
  */
 #include <nanos.h>
 
@@ -68,7 +68,8 @@ bool verify_hmac(struct nanos_pheromone* pkt) {
 }
 
 bool is_authenticated_type(uint8_t type) {
-    return type == PHEROMONE_DIE ||
-           type == PHEROMONE_QUEEN_CMD ||
+    return type == NANOS_RAW_DIE ||
+           type == PHEROMONE_DIE ||
+           type == PHEROMONE_COMMAND ||
            type == PHEROMONE_REBIRTH;
 }

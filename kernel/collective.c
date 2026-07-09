@@ -277,7 +277,7 @@ void election_start(void) {
     struct nanos_pheromone pkt;
     pkt.magic = NANOS_MAGIC;
     pkt.node_id = g_state.node_id;
-    pkt.type = PHEROMONE_ELECTION;
+    pkt.type = NANOS_RAW_ELECTION;
     pkt.ttl = GRADIENT_MAX_HOPS;
     pkt.flags = 0;
     PKT_SET_ROLE(&pkt, ROLE_CANDIDATE);

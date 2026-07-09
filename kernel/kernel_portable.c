@@ -97,8 +97,9 @@ bool verify_hmac(struct nanos_pheromone* pkt) {
 }
 
 bool is_authenticated_type(uint8_t type) {
-    return type == PHEROMONE_DIE ||
-           type == PHEROMONE_QUEEN_CMD ||
+    return type == NANOS_RAW_DIE ||
+           type == PHEROMONE_DIE ||
+           type == PHEROMONE_COMMAND ||
            type == PHEROMONE_REBIRTH;
 }
 
@@ -339,14 +340,14 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_DATA:
+        case NANOS_RAW_DATA:
             hal_console_puts("< DATA: ");
             pkt->payload[31] = '\0';
             hal_console_puts((char*)pkt->payload);
             hal_console_puts("\n");
             break;
 
-        case PHEROMONE_ALARM:
+        case NANOS_RAW_ALARM:
             hal_console_set_color(0x0C);
             hal_console_puts("! ALARM from ");
             hal_console_put_hex(pkt->node_id);
@@ -361,7 +362,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_QUEEN_CMD:
+        case PHEROMONE_COMMAND:
             if (PKT_GET_ROLE(pkt) == ROLE_QUEEN) {
                 hal_console_set_color(0x0D);
                 hal_console_puts(">> QUEEN CMD\n");
@@ -377,6 +378,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             hal_console_set_color(0x0A);
             break;
 
+        case NANOS_RAW_DIE:
         case PHEROMONE_DIE:
             if (PKT_GET_ROLE(pkt) == ROLE_QUEEN) {
                 hal_console_puts("X DIE from Queen\n");
@@ -384,7 +386,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_ELECTION:
+        case NANOS_RAW_ELECTION:
             /* Queen election in progress */
             election_process(pkt);
             break;

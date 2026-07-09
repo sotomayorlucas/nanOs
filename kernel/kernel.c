@@ -122,23 +122,23 @@ static void nert_message_handler(uint16_t sender_id, uint8_t msg_type,
     g_state.packets_rx++;
 
     switch (msg_type) {
-        case 0xA0:  /* PHEROMONE_TASK_ASSIGN */
+        case PHEROMONE_TASK_ASSIGN:
             task_handler_process_pheromone((const struct task_payload*)data);
             break;
 
-        case 0x14:  /* PHEROMONE_CONFIG_UPDATE - Genetic config from Queen */
+        case PHEROMONE_CONFIG_UPDATE:  /* Genetic config from Queen */
             /* TODO: Handle genetic configuration updates */
             serial_puts("[NERT] Config update from ");
             serial_put_hex(sender_id);
             serial_puts("\n");
             break;
 
-        case 0x13:  /* PHEROMONE_DIE - Apoptosis trigger */
+        case PHEROMONE_DIE:  /* Apoptosis trigger */
             serial_puts("[NERT] DIE command from Queen!\n");
             cell_apoptosis();
             break;
 
-        case 0x01:  /* Presence beacon (role-tagged): Queen ANNOUNCE or peer HELLO */
+        case PHEROMONE_ANNOUNCE:  /* Presence beacon (role-tagged): Queen ANNOUNCE or peer HELLO */
             /* Phase 4: a single 0x01 presence type carries both the Queen's
              * announcement and a peer worker's HELLO over NERT; disambiguate by
              * the role byte at payload[3] ([0..1]=sender id, [2]=distance). */
@@ -449,7 +449,7 @@ static void cmd_send_data(void) {
     struct nanos_pheromone pkt;
     pkt.magic = NANOS_MAGIC;
     pkt.node_id = g_state.node_id;
-    pkt.type = PHEROMONE_DATA;
+    pkt.type = NANOS_RAW_DATA;
     pkt.ttl = GRADIENT_MAX_HOPS;
     pkt.flags = 0;
     pkt.version = NANOS_VERSION;
@@ -506,7 +506,7 @@ static void cmd_send_alarm(void) {
     struct nanos_pheromone pkt;
     pkt.magic = NANOS_MAGIC;
     pkt.node_id = g_state.node_id;
-    pkt.type = PHEROMONE_ALARM;
+    pkt.type = NANOS_RAW_ALARM;
     pkt.ttl = 5;  /* Will propagate up to 5 hops */
     pkt.flags = 0;
     pkt.version = NANOS_VERSION;
@@ -549,7 +549,7 @@ static void cmd_queen_command(void) {
     struct nanos_pheromone pkt;
     pkt.magic = NANOS_MAGIC;
     pkt.node_id = g_state.node_id;
-    pkt.type = PHEROMONE_QUEEN_CMD;
+    pkt.type = PHEROMONE_COMMAND;
     pkt.ttl = GRADIENT_MAX_HOPS;
     pkt.flags = 0;
     pkt.version = NANOS_VERSION;
@@ -1426,14 +1426,14 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_DATA:
+        case NANOS_RAW_DATA:
             vga_puts("< DATA: ");
             pkt->payload[31] = '\0';
             vga_puts((char*)pkt->payload);
             vga_puts("\n");
             break;
 
-        case PHEROMONE_ALARM:
+        case NANOS_RAW_ALARM:
             vga_set_color(0x0C);  /* Red */
             vga_puts("! ALARM from ");
             vga_put_hex(pkt->node_id);
@@ -1451,7 +1451,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_QUEEN_CMD:
+        case PHEROMONE_COMMAND:
             if (PKT_GET_ROLE(pkt) != ROLE_QUEEN) {
                 vga_puts("! Non-queen sent QUEEN_CMD - ignoring\n");
                 break;
@@ -1474,8 +1474,12 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             vga_set_color(0x0A);
             break;
 
+        case NANOS_RAW_DIE:
         case PHEROMONE_DIE:
-            /* Authenticated DIE command - only queens can send */
+            /* Authenticated DIE command - only queens can send.
+             * Accept both the native raw DIE (0xFF) and the canonical
+             * cross-repo DIE (0x13) so a Queen-originated DIE reaches the
+             * raw path consistently with the encrypted NERT path. */
             if (PKT_GET_ROLE(pkt) == ROLE_QUEEN) {
                 vga_set_color(0x0C);
                 vga_puts("X DIE from Queen - halting\n");
@@ -1483,7 +1487,7 @@ void process_pheromone(struct nanos_pheromone* pkt) {
             }
             break;
 
-        case PHEROMONE_ELECTION:
+        case NANOS_RAW_ELECTION:
             /* Queen election in progress */
             election_process(pkt);
             break;

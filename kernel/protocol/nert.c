@@ -12,9 +12,12 @@
 #include <nanos/gossip.h>   /* v0.5: Hebbian routing feedback */
 #include <nanos/blackbox.h> /* v0.5: Forensic event recording */
 
-/* Pheromone type definitions (normally from nanos.h)  */
-#ifndef PHEROMONE_ECHO
-#define PHEROMONE_ECHO      0x04
+/* Pheromone type definitions (normally from nanos.h). This is nanOs's raw
+ * private ECHO value (0x04), used only as an internal SYN/ACK handshake
+ * payload byte for the connection-oriented NERT classes below -- distinct
+ * from the canonical NERT-island PHEROMONE_ECHO (0x00) in nert_proto.h. */
+#ifndef NANOS_RAW_ECHO
+#define NANOS_RAW_ECHO      0x04
 #endif
 
 /* Neighbor table structure (for multipath routing and Hebbian routing) */
@@ -2855,7 +2858,7 @@ static void handle_received_packet(uint8_t *raw_data, uint16_t len) {
             resp.header.nonce_counter = ++nonce_counter;
 
             build_nonce(nonce, resp.header.node_id, resp.header.nonce_counter);
-            uint8_t syn_payload = PHEROMONE_ECHO;
+            uint8_t syn_payload = NANOS_RAW_ECHO;
             resp.header.payload_len = 1;
 
             /* Tag goes right after the payload (see build_and_send), not the

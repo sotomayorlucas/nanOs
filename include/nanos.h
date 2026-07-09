@@ -34,6 +34,15 @@ typedef _Bool              bool;
 #endif
 
 /* ==========================================================================
+ * Canonical cross-repo pheromone protocol types (shared with micrOs/Queen):
+ * PHEROMONE_ANNOUNCE, ELECTION, REKEY, DATA, ALARM, COMMAND, DIE,
+ * CONFIG_UPDATE, TELEMETRY_REPORT, JUDAS_ENGAGE/CAPTURE/FORENSICS,
+ * TASK_ASSIGN/RESULT/STATUS/CANCEL, APP_BASE, NERT_ETH_TYPE_WIRE.
+ * nanOs's own divergent private raw types (NANOS_RAW_ prefixed) live below.
+ * ========================================================================== */
+#include <nert_proto.h>
+
+/* ==========================================================================
  * Magic Constants
  * ========================================================================== */
 #define NANOS_MAGIC         0x4E414E4F  /* "NANO" in hex */
@@ -49,14 +58,13 @@ typedef _Bool              bool;
 /* ==========================================================================
  * Pheromone Types - Extended language
  * ========================================================================== */
-#define PHEROMONE_HELLO     0x01    /* Heartbeat with gradient info */
-#define PHEROMONE_DATA      0x02    /* Information payload */
-#define PHEROMONE_ALARM     0x03    /* Danger detected */
-#define PHEROMONE_ECHO      0x04    /* Acknowledgment */
-#define PHEROMONE_ELECTION  0x05    /* Queen election vote */
+#define PHEROMONE_HELLO     PHEROMONE_ANNOUNCE  /* Heartbeat w/ gradient info; alias of canonical ANNOUNCE (0x01) */
+#define NANOS_RAW_DATA      0x02    /* Information payload (nanOs raw path; canonical DATA is 0x10) */
+#define NANOS_RAW_ALARM     0x03    /* Danger detected (nanOs raw path; canonical ALARM is 0x11) */
+#define NANOS_RAW_ECHO      0x04    /* Acknowledgment (nanOs raw path; canonical ECHO is 0x00) */
+#define NANOS_RAW_ELECTION  0x05    /* Queen election vote (nanOs raw path; canonical ELECTION is 0x02) */
 #define PHEROMONE_CORONATION 0x06   /* New queen announcement */
 #define PHEROMONE_QUERY     0x07    /* Request for routing */
-#define PHEROMONE_QUEEN_CMD 0x10    /* Command from queen */
 
 /* Workload pheromones */
 #define PHEROMONE_KV_SET    0x20    /* Key-Value store: SET */
@@ -74,17 +82,12 @@ typedef _Bool              bool;
 #define PHEROMONE_JOB_RESULT 0x53   /* Final aggregated result */
 #define PHEROMONE_JOB_STATUS 0x54   /* Job status query/response */
 
-/* Genetic Tuning pheromones (v0.7) */
-#define PHEROMONE_CONFIG_UPDATE  0x14  /* Genetic config from Queen */
-#define PHEROMONE_TELEMETRY_REPORT 0x15 /* Fitness telemetry to Queen */
-
-/* Judas Node pheromones (v0.7) */
-#define PHEROMONE_JUDAS_ENGAGE   0x16  /* Judas node engaged attacker */
-#define PHEROMONE_JUDAS_CAPTURE  0x17  /* Judas payload capture */
-#define PHEROMONE_JUDAS_FORENSICS 0x18 /* Judas forensics before death */
+/* Genetic Tuning (v0.7) + Judas Node (v0.7) pheromones: canonical, now from
+ * <nert_proto.h> (PHEROMONE_CONFIG_UPDATE, PHEROMONE_TELEMETRY_REPORT,
+ * PHEROMONE_JUDAS_ENGAGE/CAPTURE/FORENSICS). */
 
 #define PHEROMONE_REBIRTH   0xFE    /* Cell death notification */
-#define PHEROMONE_DIE       0xFF    /* Kill command */
+#define NANOS_RAW_DIE       0xFF    /* Kill command (nanOs raw apoptosis path; canonical PHEROMONE_DIE is 0x13, accepted too) */
 
 /* ==========================================================================
  * Cell Roles
