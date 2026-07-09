@@ -800,6 +800,7 @@ struct nanos_state {
     #define EVENT_JAMMING           0x05    /* Jamming detected */
     #define EVENT_CORRUPTION        0x06    /* Memory corruption */
     #define EVENT_KEY_ROTATE        0x07    /* Key rotation occurred */
+    #define EVENT_CONFIG_APPLIED    0x08    /* Genetic genome applied (kernel/genetic_receiver.c) */
 
     /* AIS (Artificial Immune System) events v0.6 */
     #define EVENT_AIS_DETECTOR_MATCH    0x10    /* Detector matched non-self */

@@ -1022,6 +1022,12 @@ void nert_rate_limit_enable(uint8_t enabled);
 void nert_rate_limit_configure(const struct nert_rate_limit_config *config);
 
 /**
+ * Get the current rate limiting configuration (read-only)
+ * @return Pointer to the live configuration structure
+ */
+const struct nert_rate_limit_config *nert_rate_limit_get_config(void);
+
+/**
  * Manually blacklist a node
  * @param node_id  Node to blacklist
  * @param duration_ms  Duration in ms (0 = use default)
@@ -1073,6 +1079,12 @@ void nert_blacklist_enable(uint8_t enabled);
  * @param config  Configuration structure (NULL uses defaults)
  */
 void nert_blacklist_configure(const struct nert_behavior_config *config);
+
+/**
+ * Get the current behavioral blacklist configuration (read-only)
+ * @return Pointer to the live configuration structure
+ */
+const struct nert_behavior_config *nert_blacklist_get_config(void);
 
 /**
  * Set callback for blacklist status changes
@@ -1216,6 +1228,12 @@ void nert_cover_reset_stats(void);
  * @return Pointer to stats structure
  */
 const struct nert_stats* nert_get_stats(void);
+
+/**
+ * Get the current number of messages queued in the Smart Padding TX queue
+ * @return Messages currently queued
+ */
+uint8_t nert_get_tx_queue_count(void);
 
 /**
  * Reset statistics counters

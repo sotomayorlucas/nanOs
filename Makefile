@@ -39,6 +39,7 @@ ifeq ($(ARCH),x86)
                 kernel/protocol/bloom.c kernel/protocol/gossip.c kernel/protocol/hmac.c \
                 kernel/protocol/nert.c kernel/protocol/nert_hal_x86.c \
                 kernel/task_handler.c \
+                kernel/genetic_receiver.c \
                 lib/nert/nert_config.c lib/nert/nert_security.c \
                 kernel/tactical/intelligence.c kernel/tactical/maze.c kernel/tactical/terrain.c \
                 kernel/workloads/global_compute.c \

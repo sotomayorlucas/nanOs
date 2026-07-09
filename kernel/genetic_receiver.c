@@ -18,15 +18,17 @@ extern volatile uint32_t ticks;
 extern struct nanos_state g_state;
 extern uint32_t random(void);
 
-/* External NERT functions */
-extern struct nert_stats* nert_get_stats(void);
+/* External NERT functions (signatures must match kernel/protocol/nert.c) */
+extern const struct nert_stats* nert_get_stats(void);
 extern void nert_set_jitter_params(uint16_t min_ms, uint16_t max_ms);
-extern void nert_rate_limit_configure(uint8_t capacity, uint8_t refill, uint16_t interval_ms);
-extern void nert_blacklist_configure(uint8_t warn_thresh, uint8_t ban_thresh);
+extern void nert_rate_limit_configure(const struct nert_rate_limit_config *config);
+extern void nert_blacklist_configure(const struct nert_behavior_config *config);
 extern void nert_cover_set_mode(uint8_t mode);
-extern int route_send(uint32_t dest_id, uint8_t type, const uint8_t *data, uint8_t len);
-extern uint8_t heap_usage_percent(void);
-extern uint8_t tx_queue_count;
+extern int route_send(uint32_t dest_id, uint8_t type, uint8_t *data, uint8_t len);
+extern size_t heap_usage_percent(void);
+extern uint8_t nert_get_tx_queue_count(void);
+extern const struct nert_rate_limit_config *nert_rate_limit_get_config(void);
+extern const struct nert_behavior_config *nert_blacklist_get_config(void);
 
 /* Worker genetic state */
 static struct genetic_worker_state g_genetic_worker;
@@ -178,14 +180,18 @@ int genetic_apply_genome(const struct nert_genome *genome,
     /* Apply jitter parameters */
     nert_set_jitter_params(genome->jitter_min_ms, genome->jitter_max_ms);
 
-    /* Apply rate limiting */
-    nert_rate_limit_configure(genome->rate_bucket_capacity,
-                               genome->rate_refill_tokens,
-                               genome->rate_refill_ms);
+    /* Apply rate limiting: read current config, override genome-controlled genes. */
+    struct nert_rate_limit_config rl = *nert_rate_limit_get_config();
+    rl.bucket_capacity     = genome->rate_bucket_capacity;
+    rl.refill_tokens       = genome->rate_refill_tokens;
+    rl.refill_interval_ms  = genome->rate_refill_ms;
+    nert_rate_limit_configure(&rl);
 
-    /* Apply behavioral blacklist thresholds */
-    nert_blacklist_configure(genome->reputation_warn,
-                              genome->reputation_ban);
+    /* Apply behavioral blacklist thresholds: read current config, override genes. */
+    struct nert_behavior_config bh = *nert_blacklist_get_config();
+    bh.warn_threshold = genome->reputation_warn;
+    bh.ban_threshold  = genome->reputation_ban;
+    nert_blacklist_configure(&bh);
 
     /* Apply cover traffic mode */
     nert_cover_set_mode(genome->cover_mode);
@@ -197,7 +203,7 @@ int genetic_apply_genome(const struct nert_genome *genome,
 
     /* Reset telemetry collection */
     g_genetic_worker.telemetry_start_tick = ticks;
-    struct nert_stats *stats = nert_get_stats();
+    const struct nert_stats *stats = nert_get_stats();
     if (stats) {
         g_genetic_worker.tx_at_start = stats->tx_packets;
         g_genetic_worker.tx_success_at_start = stats->tx_packets - stats->tx_retransmits;
@@ -265,7 +271,7 @@ void genetic_revert_to_default(void) {
  * ========================================================================== */
 
 void genetic_collect_metrics(struct telemetry_report_payload *report) {
-    struct nert_stats *stats = nert_get_stats();
+    const struct nert_stats *stats = nert_get_stats();
 
     report->genome_id = g_genetic_worker.active_genome_id;
     report->node_id = (uint16_t)g_state.node_id;
@@ -314,8 +320,8 @@ void genetic_collect_metrics(struct telemetry_report_payload *report) {
     report->alarm_count = (uint8_t)g_state.alarms_relayed;
 
     /* Resource metrics */
-    report->heap_usage_pct = heap_usage_percent();
-    report->queue_depth = tx_queue_count;
+    report->heap_usage_pct = (uint8_t)heap_usage_percent();
+    report->queue_depth = nert_get_tx_queue_count();
 
     report->report_tick = ticks;
 }
@@ -332,7 +338,7 @@ void genetic_send_telemetry_report(void) {
     }
 
     int result = route_send(queen_id, PHEROMONE_TELEMETRY_REPORT,
-                            (const uint8_t *)&report, sizeof(report));
+                            (uint8_t *)&report, sizeof(report));
 
     if (result >= 0) {
         serial_puts("[GENETIC] Telemetry sent: fitness metrics for genome 0x");
