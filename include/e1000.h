@@ -7,6 +7,7 @@
 #define E1000_H
 
 #include "nanos.h"  /* For types and structures */
+#include <nert_proto.h>  /* Canonical NERT_ETH_TYPE_WIRE */
 
 /* ==========================================================================
  * PCI Configuration - Where to find our NIC
@@ -112,7 +113,7 @@ struct e1000_tx_desc {
  * Ethernet Frame Header
  * ========================================================================== */
 #define ETH_ALEN            6       /* MAC address length */
-#define ETH_TYPE_NANOS      0x4E4F  /* "NO" - NanOS protocol */
+#define ETH_TYPE_NANOS      NERT_ETH_TYPE_WIRE  /* canonical NERT wire EtherType */
 
 struct eth_header {
     uint8_t  dst[ETH_ALEN];     /* Destination MAC */

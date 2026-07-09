@@ -11,6 +11,7 @@
 #include "../include/e1000.h"
 #include "../include/io.h"
 #include "../include/hal.h"
+#include <nert_proto.h>
 
 /* ==========================================================================
  * Software TX Queue - Non-blocking transmission
@@ -344,8 +345,8 @@ static int tx_hw_send(uint8_t* data, uint16_t length) {
             eth->src[i] = e1000_mac[i];
         }
 
-        /* EtherType: 0x4F4E (NERT protocol, must match micrOS) */
-        eth->ethertype = __builtin_bswap16(0x4F4E);
+        /* EtherType: canonical NERT wire EtherType (must match micrOS) */
+        eth->ethertype = __builtin_bswap16(NERT_ETH_TYPE_WIRE);
 
         /* Copy payload */
         uint8_t* payload = buf + sizeof(struct eth_header);

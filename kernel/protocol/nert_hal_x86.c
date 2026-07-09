@@ -8,6 +8,7 @@
 #include "nert.h"
 #include "e1000.h"
 #include "nanos.h"
+#include <nert_proto.h>
 #include <string.h>
 
 /* External state from kernel */
@@ -27,7 +28,7 @@ struct neighbor_entry neighbors[NEIGHBOR_TABLE_SIZE];
  * ============================================================================ */
 
 #define ETH_ALEN            6
-#define ETH_TYPE_NERT       0x4F4E  /* Must match micrOS NERT_ETH_TYPE */
+#define ETH_TYPE_NERT       NERT_ETH_TYPE_WIRE  /* canonical NERT wire EtherType */
 
 struct eth_frame {
     uint8_t  dst[ETH_ALEN];

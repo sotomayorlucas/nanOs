@@ -12,6 +12,7 @@
 
 #include <nanos/task_handler.h>
 #include <nanos.h>
+#include <nert_proto.h>
 #include <string.h>
 
 /* All serial output in this file is per-task tracing. Route it through the
@@ -47,7 +48,7 @@ extern int nert_send_unreliable(uint16_t dest_id, uint8_t pheromone_type,
 
 /* Ethernet constants - must match micrOS */
 #define ETH_ALEN            6
-#define NERT_ETH_TYPE       0x4F4E  /* Must match micrOS */
+#define NERT_ETH_TYPE       NERT_ETH_TYPE_WIRE  /* canonical NERT wire EtherType */
 
 /* NERT multicast MAC address - must match micrOS */
 static const uint8_t NERT_MULTICAST_MAC[ETH_ALEN] = {
