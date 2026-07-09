@@ -18,25 +18,31 @@ extern volatile uint32_t ticks;
 extern struct nanos_state g_state;
 extern uint32_t random(void);
 
-/* External NERT functions */
-extern struct nert_stats* nert_get_stats(void);
+/* External NERT functions (signatures must match kernel/protocol/nert.c) */
+extern const struct nert_stats* nert_get_stats(void);
 extern void nert_set_jitter_params(uint16_t min_ms, uint16_t max_ms);
-extern void nert_rate_limit_configure(uint8_t capacity, uint8_t refill, uint16_t interval_ms);
-extern void nert_blacklist_configure(uint8_t warn_thresh, uint8_t ban_thresh);
+extern void nert_rate_limit_configure(const struct nert_rate_limit_config *config);
+extern void nert_blacklist_configure(const struct nert_behavior_config *config);
 extern void nert_cover_set_mode(uint8_t mode);
-extern int route_send(uint32_t dest_id, uint8_t type, const uint8_t *data, uint8_t len);
-extern uint8_t heap_usage_percent(void);
-extern uint8_t tx_queue_count;
+extern size_t heap_usage_percent(void);
+extern uint8_t nert_get_tx_queue_count(void);
+extern const struct nert_rate_limit_config *nert_rate_limit_get_config(void);
+extern const struct nert_behavior_config *nert_blacklist_get_config(void);
 
 /* Worker genetic state */
 static struct genetic_worker_state g_genetic_worker;
 
 /* Rate limiting for config updates */
 #define CONFIG_RATE_LIMIT_MS        60000   /* 1 minute */
-#define CONFIG_RATE_LIMIT_COUNT     3       /* Max 3 configs per minute */
+#define CONFIG_RATE_LIMIT_COUNT     10      /* Max config APPLY/TEST per minute */
 
 /* Test mode timeout */
 #define TEST_MODE_TIMEOUT_MS        120000  /* 2 minutes */
+
+/* Max caller-supplied apply delay. The sync wait below spins on the worker's single
+ * cooperative loop, and apply_delay_ms comes from the (authenticated but trusted)
+ * payload; cap it so a buggy/hostile Queen cannot stall RX/telemetry/task processing. */
+#define GENETIC_MAX_APPLY_DELAY_MS  500
 
 /* ==========================================================================
  * CRC16 Calculation (must match Queen's implementation)
@@ -161,6 +167,11 @@ int genetic_apply_genome(const struct nert_genome *genome,
         genetic_save_backup();
     }
 
+    /* Clamp payload-supplied delay (see GENETIC_MAX_APPLY_DELAY_MS). */
+    if (delay_ms > GENETIC_MAX_APPLY_DELAY_MS) {
+        delay_ms = GENETIC_MAX_APPLY_DELAY_MS;
+    }
+
     /* Wait for sync delay */
     if (delay_ms > 0) {
         uint32_t target = ticks + (delay_ms / 10);
@@ -178,14 +189,18 @@ int genetic_apply_genome(const struct nert_genome *genome,
     /* Apply jitter parameters */
     nert_set_jitter_params(genome->jitter_min_ms, genome->jitter_max_ms);
 
-    /* Apply rate limiting */
-    nert_rate_limit_configure(genome->rate_bucket_capacity,
-                               genome->rate_refill_tokens,
-                               genome->rate_refill_ms);
+    /* Apply rate limiting: read current config, override genome-controlled genes. */
+    struct nert_rate_limit_config rl = *nert_rate_limit_get_config();
+    rl.bucket_capacity     = genome->rate_bucket_capacity;
+    rl.refill_tokens       = genome->rate_refill_tokens;
+    rl.refill_interval_ms  = genome->rate_refill_ms;
+    nert_rate_limit_configure(&rl);
 
-    /* Apply behavioral blacklist thresholds */
-    nert_blacklist_configure(genome->reputation_warn,
-                              genome->reputation_ban);
+    /* Apply behavioral blacklist thresholds: read current config, override genes. */
+    struct nert_behavior_config bh = *nert_blacklist_get_config();
+    bh.warn_threshold = genome->reputation_warn;
+    bh.ban_threshold  = genome->reputation_ban;
+    nert_blacklist_configure(&bh);
 
     /* Apply cover traffic mode */
     nert_cover_set_mode(genome->cover_mode);
@@ -197,7 +212,7 @@ int genetic_apply_genome(const struct nert_genome *genome,
 
     /* Reset telemetry collection */
     g_genetic_worker.telemetry_start_tick = ticks;
-    struct nert_stats *stats = nert_get_stats();
+    const struct nert_stats *stats = nert_get_stats();
     if (stats) {
         g_genetic_worker.tx_at_start = stats->tx_packets;
         g_genetic_worker.tx_success_at_start = stats->tx_packets - stats->tx_retransmits;
@@ -265,7 +280,7 @@ void genetic_revert_to_default(void) {
  * ========================================================================== */
 
 void genetic_collect_metrics(struct telemetry_report_payload *report) {
-    struct nert_stats *stats = nert_get_stats();
+    const struct nert_stats *stats = nert_get_stats();
 
     report->genome_id = g_genetic_worker.active_genome_id;
     report->node_id = (uint16_t)g_state.node_id;
@@ -314,8 +329,8 @@ void genetic_collect_metrics(struct telemetry_report_payload *report) {
     report->alarm_count = (uint8_t)g_state.alarms_relayed;
 
     /* Resource metrics */
-    report->heap_usage_pct = heap_usage_percent();
-    report->queue_depth = tx_queue_count;
+    report->heap_usage_pct = (uint8_t)heap_usage_percent();
+    report->queue_depth = nert_get_tx_queue_count();
 
     report->report_tick = ticks;
 }
@@ -331,8 +346,8 @@ void genetic_send_telemetry_report(void) {
         queen_id = 0;
     }
 
-    int result = route_send(queen_id, PHEROMONE_TELEMETRY_REPORT,
-                            (const uint8_t *)&report, sizeof(report));
+    int result = nert_send_unreliable(queen_id, PHEROMONE_TELEMETRY_REPORT,
+                                      &report, sizeof(report));
 
     if (result >= 0) {
         serial_puts("[GENETIC] Telemetry sent: fitness metrics for genome 0x");
@@ -347,51 +362,37 @@ void genetic_send_telemetry_report(void) {
  * Pheromone Processing
  * ========================================================================== */
 
-void genetic_process_config_update(struct nanos_pheromone *pkt) {
-    /* Verify sender is Queen (check role flag) */
-    uint8_t sender_role = (pkt->flags >> FLAG_ROLE_SHIFT) & 0x07;
-    if (sender_role != ROLE_QUEEN) {
-        serial_puts("[GENETIC] Rejected config from non-Queen\n");
-        blackbox_record_event(EVENT_BAD_MAC, (uint16_t)pkt->node_id);
-        return;
-    }
-
-    /* Rate limiting */
-    uint32_t now = ticks;
-    if (now - g_genetic_worker.last_config_tick < (CONFIG_RATE_LIMIT_MS / 10)) {
-        g_genetic_worker.config_count++;
-        if (g_genetic_worker.config_count > CONFIG_RATE_LIMIT_COUNT) {
-            serial_puts("[GENETIC] Rate limited - too many config updates\n");
-            return;
-        }
-    } else {
-        g_genetic_worker.last_config_tick = now;
-        g_genetic_worker.config_count = 1;
-    }
-
-    /* Extract payload */
-    if (sizeof(struct config_update_payload) > 32) {
-        serial_puts("[GENETIC] Payload too large\n");
-        return;
-    }
-
-    struct config_update_payload *payload =
-        (struct config_update_payload *)pkt->payload;
-
-    /* Check sub-swarm targeting */
+/* Shared command core. sender_id is the authenticated NERT sender (or the raw
+ * pheromone node_id). Applies rate-limit to reconfiguring commands only. */
+static void genetic_apply_config_payload(uint16_t sender_id,
+                                         const struct config_update_payload *payload) {
+    /* Sub-swarm targeting (0 = all) */
     if (payload->sub_swarm_id != 0 &&
         payload->sub_swarm_id != g_genetic_worker.sub_swarm_id) {
-        /* Not for us */
-        return;
+        return;  /* Not for us */
     }
 
-    /* Process command */
+    /* Rate limiting applies only to reconfiguring commands (APPLY/TEST). REPORT and
+     * REVERT do not reconfigure and must not consume the budget. */
+    if (payload->command == CONFIG_CMD_APPLY || payload->command == CONFIG_CMD_TEST) {
+        uint32_t now = ticks;
+        if (now - g_genetic_worker.last_config_tick < (CONFIG_RATE_LIMIT_MS / 10)) {
+            g_genetic_worker.config_count++;
+            if (g_genetic_worker.config_count > CONFIG_RATE_LIMIT_COUNT) {
+                serial_puts("[GENETIC] Rate limited - too many config updates\n");
+                return;
+            }
+        } else {
+            g_genetic_worker.last_config_tick = now;
+            g_genetic_worker.config_count = 1;
+        }
+    }
+
     switch (payload->command) {
         case CONFIG_CMD_APPLY:
-            /* Verify genome checksum */
             if (!genetic_verify_genome(&payload->genome)) {
                 serial_puts("[GENETIC] Invalid genome checksum\n");
-                blackbox_record_event(EVENT_CORRUPTION, (uint16_t)pkt->node_id);
+                blackbox_record_event(EVENT_CORRUPTION, sender_id);
                 return;
             }
             genetic_apply_genome(&payload->genome, payload->apply_delay_ms, false);
@@ -400,7 +401,7 @@ void genetic_process_config_update(struct nanos_pheromone *pkt) {
         case CONFIG_CMD_TEST:
             if (!genetic_verify_genome(&payload->genome)) {
                 serial_puts("[GENETIC] Invalid genome checksum\n");
-                blackbox_record_event(EVENT_CORRUPTION, (uint16_t)pkt->node_id);
+                blackbox_record_event(EVENT_CORRUPTION, sender_id);
                 return;
             }
             genetic_apply_genome(&payload->genome, payload->apply_delay_ms, true);
@@ -420,6 +421,27 @@ void genetic_process_config_update(struct nanos_pheromone *pkt) {
             serial_puts("\n");
             break;
     }
+}
+
+/* NERT dispatch entry for PHEROMONE_CONFIG_UPDATE (0x14). The decrypted payload is
+ * delivered as (sender_id, data, len) -- NOT a nanos_pheromone. */
+void genetic_process_config_nert(uint16_t sender_id, const void *data, uint8_t len) {
+    if (data == NULL || len < sizeof(struct config_update_payload)) {
+        serial_puts("[GENETIC] Config payload too short\n");
+        return;
+    }
+
+    /* Accept only from the known Queen. If we have not yet learned the Queen's id
+     * (known_queen_id == 0), accept: NERT authentication already proves the sender
+     * is a swarm member holding the PSK. */
+    uint16_t queen = (uint16_t)g_state.known_queen_id;
+    if (queen != 0 && sender_id != queen) {
+        serial_puts("[GENETIC] Rejected config from non-Queen\n");
+        blackbox_record_event(EVENT_BAD_MAC, sender_id);
+        return;
+    }
+
+    genetic_apply_config_payload(sender_id, (const struct config_update_payload *)data);
 }
 
 /* ==========================================================================

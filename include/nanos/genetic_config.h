@@ -140,12 +140,14 @@ struct genetic_worker_state {
 void genetic_config_init(void);
 
 /**
- * Process received CONFIG_UPDATE pheromone
- * Called from main pheromone handler
+ * Process a received CONFIG_UPDATE (0x14) delivered over encrypted NERT.
+ * Called from nert_message_handler.
  *
- * @param pkt  Received pheromone packet
+ * @param sender_id  Authenticated NERT sender id
+ * @param data       Decrypted payload (expects struct config_update_payload)
+ * @param len        Payload length in bytes
  */
-void genetic_process_config_update(struct nanos_pheromone *pkt);
+void genetic_process_config_nert(uint16_t sender_id, const void *data, uint8_t len);
 
 /**
  * Apply a genome to the NERT configuration

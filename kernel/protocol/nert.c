@@ -196,6 +196,20 @@ static nert_blacklist_callback_t blacklist_callback = NULL;
 /* Last recovery tick */
 static uint32_t behavior_last_recovery_tick = 0;
 
+/* Read-only accessors for the genetic tuning receiver (kernel/genetic_receiver.c),
+ * which does read-modify-write on the live config and reports queue depth. */
+uint8_t nert_get_tx_queue_count(void) {
+    return tx_queue_count;
+}
+
+const struct nert_rate_limit_config *nert_rate_limit_get_config(void) {
+    return &rate_limit_config;
+}
+
+const struct nert_behavior_config *nert_blacklist_get_config(void) {
+    return &behavior_config;
+}
+
 /* ============================================================================
  * Cover Traffic State (v0.5)
  * ============================================================================ */

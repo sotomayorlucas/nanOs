@@ -15,6 +15,7 @@
 #include "../include/nanos/allocator.h"
 #include "../include/nanos/serial.h"
 #include "../include/nanos/task_handler.h"
+#include <nanos/genetic_config.h>
 
 /* NERT Protocol Integration */
 #include <nert.h>
@@ -126,11 +127,8 @@ static void nert_message_handler(uint16_t sender_id, uint8_t msg_type,
             task_handler_process_pheromone((const struct task_payload*)data);
             break;
 
-        case PHEROMONE_CONFIG_UPDATE:  /* Genetic config from Queen */
-            /* TODO: Handle genetic configuration updates */
-            serial_puts("[NERT] Config update from ");
-            serial_put_hex(sender_id);
-            serial_puts("\n");
+        case PHEROMONE_CONFIG_UPDATE:  /* Genetic config from Queen (over NERT) */
+            genetic_process_config_nert(sender_id, data, len);
             break;
 
         case PHEROMONE_DIE:  /* Apoptosis trigger */
@@ -1786,6 +1784,9 @@ void nanos_loop(void) {
 
             /* Task handler periodic tick */
             task_handler_tick();
+
+            /* v0.7: genetic test-mode timeout handling */
+            genetic_config_tick();
         }
 
         /* Periodic metrics logging to serial (every 10 seconds) */
@@ -1998,6 +1999,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
 
     /* v0.5: Initialize distributed black box (forensics) */
     blackbox_init();
+
+    /* v0.7: Initialize genetic-config receiver (applies Queen-evolved NERT params) */
+    genetic_config_init();
 
     vga_puts("\n[*] Cell alive. Features:\n");
     vga_puts("    - Quorum sensing\n");
