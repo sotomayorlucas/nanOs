@@ -35,7 +35,7 @@ static struct genetic_worker_state g_genetic_worker;
 
 /* Rate limiting for config updates */
 #define CONFIG_RATE_LIMIT_MS        60000   /* 1 minute */
-#define CONFIG_RATE_LIMIT_COUNT     3       /* Max 3 configs per minute */
+#define CONFIG_RATE_LIMIT_COUNT     10      /* Max config APPLY/TEST per minute */
 
 /* Test mode timeout */
 #define TEST_MODE_TIMEOUT_MS        120000  /* 2 minutes */
@@ -353,51 +353,37 @@ void genetic_send_telemetry_report(void) {
  * Pheromone Processing
  * ========================================================================== */
 
-void genetic_process_config_update(struct nanos_pheromone *pkt) {
-    /* Verify sender is Queen (check role flag) */
-    uint8_t sender_role = (pkt->flags >> FLAG_ROLE_SHIFT) & 0x07;
-    if (sender_role != ROLE_QUEEN) {
-        serial_puts("[GENETIC] Rejected config from non-Queen\n");
-        blackbox_record_event(EVENT_BAD_MAC, (uint16_t)pkt->node_id);
-        return;
-    }
-
-    /* Rate limiting */
-    uint32_t now = ticks;
-    if (now - g_genetic_worker.last_config_tick < (CONFIG_RATE_LIMIT_MS / 10)) {
-        g_genetic_worker.config_count++;
-        if (g_genetic_worker.config_count > CONFIG_RATE_LIMIT_COUNT) {
-            serial_puts("[GENETIC] Rate limited - too many config updates\n");
-            return;
-        }
-    } else {
-        g_genetic_worker.last_config_tick = now;
-        g_genetic_worker.config_count = 1;
-    }
-
-    /* Extract payload */
-    if (sizeof(struct config_update_payload) > 32) {
-        serial_puts("[GENETIC] Payload too large\n");
-        return;
-    }
-
-    struct config_update_payload *payload =
-        (struct config_update_payload *)pkt->payload;
-
-    /* Check sub-swarm targeting */
+/* Shared command core. sender_id is the authenticated NERT sender (or the raw
+ * pheromone node_id). Applies rate-limit to reconfiguring commands only. */
+static void genetic_apply_config_payload(uint16_t sender_id,
+                                         const struct config_update_payload *payload) {
+    /* Sub-swarm targeting (0 = all) */
     if (payload->sub_swarm_id != 0 &&
         payload->sub_swarm_id != g_genetic_worker.sub_swarm_id) {
-        /* Not for us */
-        return;
+        return;  /* Not for us */
     }
 
-    /* Process command */
+    /* Rate limiting applies only to reconfiguring commands (APPLY/TEST). REPORT and
+     * REVERT do not reconfigure and must not consume the budget. */
+    if (payload->command == CONFIG_CMD_APPLY || payload->command == CONFIG_CMD_TEST) {
+        uint32_t now = ticks;
+        if (now - g_genetic_worker.last_config_tick < (CONFIG_RATE_LIMIT_MS / 10)) {
+            g_genetic_worker.config_count++;
+            if (g_genetic_worker.config_count > CONFIG_RATE_LIMIT_COUNT) {
+                serial_puts("[GENETIC] Rate limited - too many config updates\n");
+                return;
+            }
+        } else {
+            g_genetic_worker.last_config_tick = now;
+            g_genetic_worker.config_count = 1;
+        }
+    }
+
     switch (payload->command) {
         case CONFIG_CMD_APPLY:
-            /* Verify genome checksum */
             if (!genetic_verify_genome(&payload->genome)) {
                 serial_puts("[GENETIC] Invalid genome checksum\n");
-                blackbox_record_event(EVENT_CORRUPTION, (uint16_t)pkt->node_id);
+                blackbox_record_event(EVENT_CORRUPTION, sender_id);
                 return;
             }
             genetic_apply_genome(&payload->genome, payload->apply_delay_ms, false);
@@ -406,7 +392,7 @@ void genetic_process_config_update(struct nanos_pheromone *pkt) {
         case CONFIG_CMD_TEST:
             if (!genetic_verify_genome(&payload->genome)) {
                 serial_puts("[GENETIC] Invalid genome checksum\n");
-                blackbox_record_event(EVENT_CORRUPTION, (uint16_t)pkt->node_id);
+                blackbox_record_event(EVENT_CORRUPTION, sender_id);
                 return;
             }
             genetic_apply_genome(&payload->genome, payload->apply_delay_ms, true);
@@ -426,6 +412,27 @@ void genetic_process_config_update(struct nanos_pheromone *pkt) {
             serial_puts("\n");
             break;
     }
+}
+
+/* NERT dispatch entry for PHEROMONE_CONFIG_UPDATE (0x14). The decrypted payload is
+ * delivered as (sender_id, data, len) -- NOT a nanos_pheromone. */
+void genetic_process_config_nert(uint16_t sender_id, const void *data, uint8_t len) {
+    if (data == NULL || len < sizeof(struct config_update_payload)) {
+        serial_puts("[GENETIC] Config payload too short\n");
+        return;
+    }
+
+    /* Accept only from the known Queen. If we have not yet learned the Queen's id
+     * (known_queen_id == 0), accept: NERT authentication already proves the sender
+     * is a swarm member holding the PSK. */
+    uint16_t queen = (uint16_t)g_state.known_queen_id;
+    if (queen != 0 && sender_id != queen) {
+        serial_puts("[GENETIC] Rejected config from non-Queen\n");
+        blackbox_record_event(EVENT_BAD_MAC, sender_id);
+        return;
+    }
+
+    genetic_apply_config_payload(sender_id, (const struct config_update_payload *)data);
 }
 
 /* ==========================================================================
