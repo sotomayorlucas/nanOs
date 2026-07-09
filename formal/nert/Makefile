@@ -958,6 +958,10 @@ debug:
 # variables if necessary.
 -include Makefile.local-late
 
+audit:
+	coqtop -Q . NERT -batch -l audit.v
+.PHONY: audit
+
 # Local Variables:
 # mode: makefile-gmake
 # End:
