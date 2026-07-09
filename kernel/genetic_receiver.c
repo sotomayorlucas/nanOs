@@ -39,6 +39,11 @@ static struct genetic_worker_state g_genetic_worker;
 /* Test mode timeout */
 #define TEST_MODE_TIMEOUT_MS        120000  /* 2 minutes */
 
+/* Max caller-supplied apply delay. The sync wait below spins on the worker's single
+ * cooperative loop, and apply_delay_ms comes from the (authenticated but trusted)
+ * payload; cap it so a buggy/hostile Queen cannot stall RX/telemetry/task processing. */
+#define GENETIC_MAX_APPLY_DELAY_MS  500
+
 /* ==========================================================================
  * CRC16 Calculation (must match Queen's implementation)
  * ========================================================================== */
@@ -160,6 +165,11 @@ int genetic_apply_genome(const struct nert_genome *genome,
     /* Save backup if entering test mode */
     if (test_mode && !g_genetic_worker.has_backup) {
         genetic_save_backup();
+    }
+
+    /* Clamp payload-supplied delay (see GENETIC_MAX_APPLY_DELAY_MS). */
+    if (delay_ms > GENETIC_MAX_APPLY_DELAY_MS) {
+        delay_ms = GENETIC_MAX_APPLY_DELAY_MS;
     }
 
     /* Wait for sync delay */
