@@ -24,7 +24,6 @@ extern void nert_set_jitter_params(uint16_t min_ms, uint16_t max_ms);
 extern void nert_rate_limit_configure(const struct nert_rate_limit_config *config);
 extern void nert_blacklist_configure(const struct nert_behavior_config *config);
 extern void nert_cover_set_mode(uint8_t mode);
-extern int route_send(uint32_t dest_id, uint8_t type, uint8_t *data, uint8_t len);
 extern size_t heap_usage_percent(void);
 extern uint8_t nert_get_tx_queue_count(void);
 extern const struct nert_rate_limit_config *nert_rate_limit_get_config(void);
@@ -337,8 +336,8 @@ void genetic_send_telemetry_report(void) {
         queen_id = 0;
     }
 
-    int result = route_send(queen_id, PHEROMONE_TELEMETRY_REPORT,
-                            (uint8_t *)&report, sizeof(report));
+    int result = nert_send_unreliable(queen_id, PHEROMONE_TELEMETRY_REPORT,
+                                      &report, sizeof(report));
 
     if (result >= 0) {
         serial_puts("[GENETIC] Telemetry sent: fitness metrics for genome 0x");
