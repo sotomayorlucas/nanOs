@@ -43,7 +43,7 @@ así que el modelo caracteriza esos bugs como teoremas, no como comentarios.
 | `Bytes.v` | tipos base: byte/word como `N`, helpers de listas, `MAX_PAYLOAD` | — (base) |
 | `Nonce.v` | generador de nonce `(node_id ‖ counter)`, seed por-boot, reboot | **A** |
 | `Aead.v` | MAC/AEAD abstracto, `key_is_zero`, supuesto de infalsificabilidad | **B** |
-| `Replay.v` | ventana deslizante de 128 bits (`check_and_update`) | **C** |
+| `Replay.v` | ventana deslizante de 64 bits (`check_and_update`) | **C** |
 | `Demux.v` | clasificador por primer byte (0x4E NERT / 0x4F raw) | **D** |
 | `Tlv.v` | reensamblado de fragmentos length-prefixed | **E** |
 
@@ -80,13 +80,13 @@ Modelo: `Parameter mac : Key -> Msg -> Tag`. `verify k m t := tag_eqb (mac k m) 
   `key_is_zero` es **necesario** (teorema, no comentario).
 
 ### C — `Replay.v` (ventana de replay; mitigación T4 documentada)
-Modelo: `Window := { top : N; bits : list bool (* 128 offsets bajo top *) }`.
+Modelo: `Window := { top : N; bits : list bool (* 64 offsets bajo top *) }`.
 `check_and_update : Window -> N (*seq*) -> option Window` (None = replay/viejo
 rechazado; Some W' = aceptado + actualizado). Pruebas **puras** (sin supuestos cripto).
 - `replay_no_double_accept`: en cualquier corrida (fold de `check_and_update`), un
   `seq` dado se acepta **a lo sumo una vez**.
 - `replay_monotone`: `top` es no-decreciente a lo largo de la corrida.
-- `replay_old_rejected`: `seq + 128 ≤ top ⇒ check_and_update = None`.
+- `replay_old_rejected`: `seq + 64 ≤ top ⇒ check_and_update = None`.
 
 ### D — `Demux.v` (demux por primer byte)
 Modelo: `classify : byte -> FrameKind` con `FrameKind := Nert | Raw | Drop`.
@@ -111,7 +111,8 @@ Documentados en el README y como `Hypothesis`/comentarios:
 2. `mac zero_key · = zero_tag` — fiel al bug real (Poly1305 con r=s=0 da tag cero).
 3. nonce = `node_id ‖ counter` (96 bits) y el reboot resetea el counter — fiel a
    `nert.c`.
-4. La ventana de replay es de 128 posiciones (fiel a `replay_bitmap_high/low`).
+4. La ventana de replay es de 64 posiciones (fiel a `replay_bitmap`, un único
+   bitmap de 64 bits; `NERT_REPLAY_WINDOW_SIZE = 64`).
 El modelo **abstrae** bytes/keystream de ChaCha20 y **no** cubre: el C, unforgeability
 real de Poly1305, ChaCha20 bit-exacto, timing, concurrencia/interrupciones, ARM.
 

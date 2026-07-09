@@ -1,7 +1,8 @@
-(* Property C: replay protection via a sliding window (nert.c replay_bitmap_high/low,
-   128-bit). THREAT_MODEL T4. Pure data-structure proofs, no crypto assumptions.
+(* Property C: replay protection via a sliding window. Faithful to nert.c:
+   a single 64-bit bitmap (include/nert.h replay_bitmap, NERT_REPLAY_WINDOW_SIZE
+   = 64). THREAT_MODEL T4. Pure data-structure proofs, no crypto assumptions.
 
-   Modeling note: acc keeps the full accept history rather than a bounded 128-bit
+   Modeling note: acc keeps the full accept history rather than a bounded 64-bit
    bitmap; combined with the too_old gate this is a sound abstraction for the
    *safety* properties (no-double-accept, old-rejected, monotone) — it never
    accepts something the real bounded window would reject. The memory-boundedness
@@ -9,7 +10,7 @@
 From Stdlib Require Import List Arith PeanoNat Lia Bool.
 Import ListNotations.
 
-Definition WINDOW : nat := 128.
+Definition WINDOW : nat := 64.
 
 Record Win := mkWin { top : nat; acc : list nat }.
 Definition w0 : Win := mkWin 0 [].
